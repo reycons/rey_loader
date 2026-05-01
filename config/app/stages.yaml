@@ -1,0 +1,16 @@
+# =============================================================================
+# App Configuration: External Stage Runners
+#
+# Defines paths and arguments for standalone stages that lupo_loader
+# orchestrates via subprocess. Each stage is fully independent —
+# lupo_loader only controls when it runs and what args it receives.
+# =============================================================================
+
+stages:
+  ftp_sync:
+    # Absolute path to the ftp_sync entry point
+    python:     D:/Python/ftp_sync/venv/Scripts/python.exe
+    script:     D:/Python/ftp_sync/main.py
+    # Default args passed on every invocation — env is appended at runtime
+    args:
+      - --env

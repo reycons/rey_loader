@@ -1,0 +1,24 @@
+# =============================================================================
+# Lupo Loader — Main Configuration (dev)
+#
+# Singleton values and global settings only.
+# Named instances live in sub-config files under config/db/ and config/data_feeds/
+#
+# PATH RULES
+#   Paths starting with ~   are relative to your home directory
+#   All other paths         are treated as absolute
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Logging
+# {operation} and {timestamp} are substituted at runtime.
+# Each run produces a distinct log file.
+# -----------------------------------------------------------------------------
+
+log_path: ~/.lupo_loader/logs/lupo_loader.{operation}.{timestamp}.log
+
+# -----------------------------------------------------------------------------
+# Data handling
+# -----------------------------------------------------------------------------
+
+chunk_size: 500
