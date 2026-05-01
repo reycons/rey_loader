@@ -13,3 +13,7 @@ db:
       # user and password injected from .env at startup via inject_secrets()
       # SQLSERVER_NAVICONTROL_USER / SQLSERVER_NAVICONTROL_PASSWORD
       # Omit user entirely to use Windows Authentication
+
+  # Designates which connection owns batch and step logging.
+  # db.py reads this at startup to open the correct connection.
+  batch_connection: SQLServer_NaviControl_local

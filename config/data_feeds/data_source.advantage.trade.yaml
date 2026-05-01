@@ -14,6 +14,7 @@
 data_sources:
 
   - name: advantage
+    max_files_per_run: 10   # maximum files loaded per run — prevents backlog flooding
 
     # -------------------------------------------------------------------------
     # Paths
@@ -126,6 +127,7 @@ data_sources:
         # -----------------------------------------------------------------------
 
         constants:
+          BatchID:             "{batch_id}"              # injected at load time from active batch
           incoming_file_name:  "{incoming_file_name}"
           processed_file_name: "{processed_file_name}"
           loaded_file_name:    "{loaded_file_name}"
@@ -335,9 +337,11 @@ data_sources:
 
         load:
           connection: SQLServer_NaviStage_local
-          destination_table:    NaviControl.Advantage_SCH.transaction
+          destination_table:    NaviStage.Advantage_SCH.transaction
           version: "v01"
-
+          file_id_column:    incoming_file_name   # column used to identify rows for a file
+          batch_id_column:   BatchID              # column holding the BatchID that loaded the rows
+          
         movements:
           success:
             # Processed file moves to loaded after a clean database insert.

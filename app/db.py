@@ -47,6 +47,7 @@ __all__ = [
     "end_batch",
     "start_step",
     "end_step",
+    "log_reload",
 ]
 
 log = logging.getLogger(__name__)
@@ -298,3 +299,83 @@ def end_step(
         raise
     finally:
         log_exit(ctx, "end_step done", log)
+
+
+
+# --- add to __all__ ---
+"log_reload",
+
+# --- add after end_step ---
+
+def log_reload(
+    ctx: Any,
+    batch_conn: pyodbc.Connection,
+    file_path: Path,
+    original_batch_id: Optional[int],
+    new_batch_id: Optional[int],
+) -> None:
+    """
+    Log BatchStep records on both batches when a file is being reloaded.
+
+    Called via the on_reload callback when file_loader detects that a
+    file's rows already exist in staging. Adds a step to the original
+    batch noting it is being superseded, closes the original batch, then
+    adds a step to the new batch noting it is a reload.
+
+    Parameters
+    ----------
+    ctx : Any
+        Application context — used for logging.
+    batch_conn : pyodbc.Connection
+        Open SQL Server connection to NaviControl.
+    file_path : Path
+        File being reloaded.
+    original_batch_id : Optional[int]
+        BatchID that originally loaded the file.
+    new_batch_id : Optional[int]
+        BatchID of the current reload run.
+    """
+    log_enter(ctx, f"log_reload: {file_path.name}", log)
+
+    try:
+        # Step on original batch — note it is being superseded.
+        if original_batch_id is not None:
+            start_step(
+                ctx,
+                batch_conn,
+                batch_id=original_batch_id,
+                severity=SEVERITY_WARNING,
+                source="file_loader",
+                message=(
+                    f"File '{file_path.name}' reloaded by BatchID={new_batch_id}. "
+                    f"Staging rows deleted and reloaded under new batch."
+                ),
+                record_count=0,
+            )
+            end_batch(ctx, batch_conn, original_batch_id)
+            log.warning(
+                "Original batch closed: BatchID=%d superseded by BatchID=%s",
+                original_batch_id, new_batch_id,
+            )
+
+        # Step on new batch — note it is a reload.
+        if new_batch_id is not None:
+            start_step(
+                ctx,
+                batch_conn,
+                batch_id=new_batch_id,
+                severity=SEVERITY_WARNING,
+                source="file_loader",
+                message=(
+                    f"Reload of '{file_path.name}'. "
+                    f"Previously loaded in BatchID={original_batch_id} — "
+                    f"staging rows were deleted and file is being reloaded."
+                ),
+                record_count=0,
+            )
+
+    finally:
+        log_exit(ctx, "log_reload done", log)
+
+        
+                
