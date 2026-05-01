@@ -232,8 +232,13 @@ def start_step(
             [batch_id, severity, source, message, record_count, parent_step_id, None],
         )
         try:
-            cursor.nextset()
-            row = cursor.fetchone()
+            row = None
+            while row is None:
+                try:
+                    row = cursor.fetchone()
+                except Exception:
+                    if not cursor.nextset():
+                        break
             if row is None:
                 raise DatabaseError(
                     f"pIns_BatchStep returned no BatchStepID for "
@@ -242,7 +247,7 @@ def start_step(
             step_id = int(row[0])
         finally:
             cursor.close()
-            
+                        
 
         conn.commit()
         log.debug(
