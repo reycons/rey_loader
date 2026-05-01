@@ -26,6 +26,7 @@ from rey_lib.db import sqlserver_utils
 from rey_lib.errors.error_utils import AppError
 from rey_lib.files.file_loader import load_files
 from rey_lib.logs.log_utils import setup_logging
+from rey_lib.config.ctx import find_by_name
 
 from app import db as app_db
 
@@ -117,7 +118,7 @@ def _run_load(ctx: Any) -> None:
     # Resolve batch connection from config.
     from rey_lib.config.ctx import find_in_ctx
     batch_conn_name = ctx.db.batch_connection
-    batch_cfg       = find_in_ctx(ctx, "db.connections", batch_conn_name)
+    batch_cfg       = find_by_name(ctx.db.connections, batch_conn_name)
 
     sql_dir = Path("sql/sqlserver")
     if sql_dir.exists():
@@ -177,7 +178,7 @@ def _load_all_sources(
             # Resolve the load connection from config.
             from rey_lib.config.ctx import find_in_ctx
             load_conn_name = load_cfg.load.connection
-            load_cfg_db    = find_in_ctx(ctx, "db.connections", load_conn_name)
+            load_cfg_db    = find_by_name(ctx.db.connections, load_conn_name)
 
             with sqlserver_utils.get_connection(load_cfg_db) as load_conn:
                 on_reload = functools.partial(
