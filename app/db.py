@@ -109,6 +109,8 @@ def start_batch(
             [datetime.now(), description, None],  # BatchStartDT, description, BatchID output
         )
         try:
+            # Advance past any output parameter result sets to reach the SELECT.
+            cursor.nextset()
             row = cursor.fetchone()
             if row is None:
                 raise DatabaseError(
@@ -117,6 +119,7 @@ def start_batch(
             batch_id = int(row[0])
         finally:
             cursor.close()
+            
 
         conn.commit()
         log.info("Batch started: BatchID=%d  description=%s", batch_id, description)
