@@ -119,7 +119,7 @@ def start_batch(
             batch_id = int(row[0])
         finally:
             cursor.close()
-            
+
 
         conn.commit()
         log.info("Batch started: BatchID=%d  description=%s", batch_id, description)
@@ -229,9 +229,10 @@ def start_step(
         cursor = sqlserver_utils.call_proc(
             conn,
             _PROC_INS_BATCH_STEP,
-            [batch_id, severity, source, message, record_count, parent_step_id],
+            [batch_id, severity, source, message, record_count, parent_step_id, None],
         )
         try:
+            cursor.nextset()
             row = cursor.fetchone()
             if row is None:
                 raise DatabaseError(
@@ -241,6 +242,7 @@ def start_step(
             step_id = int(row[0])
         finally:
             cursor.close()
+            
 
         conn.commit()
         log.debug(
