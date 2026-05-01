@@ -8,6 +8,7 @@ pipeline in sequence.
 Usage
 -----
     python main.py --env dev  --stage sync
+    python main.py --env prod --stage transform
     python main.py --env prod --stage load
     python main.py --env prod --stage all
 """
@@ -15,25 +16,26 @@ Usage
 from __future__ import annotations
 
 import argparse
+import functools
 import logging
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-from rey_lib.config.config_utils import build_ctx, inject_secrets
+from rey_lib.config.config_utils import build_ctx
+from rey_lib.config.ctx import find_by_name
 from rey_lib.db import sqlserver_utils
 from rey_lib.errors.error_utils import AppError
-from rey_lib.files.file_loader import load_files
+from rey_lib.files.file_loader import load_files, transform_files
 from rey_lib.logs.log_utils import setup_logging
-from rey_lib.config.ctx import find_by_name
 
 from app import db as app_db
 
 __all__: list[str] = []
 
 _PROJECT_ROOT = Path(__file__).parent
-_VALID_STAGES = frozenset({"sync", "load", "all"})
+_VALID_STAGES = frozenset({"sync", "transform", "load", "all"})
 
 
 # ---------------------------------------------------------------------------
@@ -45,10 +47,6 @@ def main() -> None:
     args = _parse_args()
 
     ctx = build_ctx(env=args.env, project_root=_PROJECT_ROOT)
-    inject_secrets(ctx, {
-        "SQLSERVER_NAVICONTROL_PASSWORD": "db.connections.0.password",
-        "SQLSERVER_NAVISTAGE_PASSWORD":   "db.connections.1.password",
-    })
 
     setup_logging(ctx, operation=args.stage)
     log = logging.getLogger(__name__)
@@ -57,6 +55,9 @@ def main() -> None:
     try:
         if args.stage in ("sync", "all"):
             _run_sync(ctx)
+
+        if args.stage in ("transform", "all"):
+            _run_transform(ctx)
 
         if args.stage in ("load", "all"):
             _run_load(ctx)
@@ -105,78 +106,165 @@ def _run_sync(ctx: Any) -> None:
     log.info("ftp_sync complete.")
 
 
-def _run_load(ctx: Any) -> None:
+def _run_transform(ctx: Any) -> None:
     """
-    Load all pending files for all configured data sources.
+    Transform all pending files for all configured data sources.
 
-    Opens a batch in NaviControl, loads each data source, and closes
-    the batch on completion. Each file load is self-contained — a
-    failure on one file does not prevent processing of others.
+    Opens a batch in NaviControl, transforms each data source, and closes
+    the batch on completion. batch_id is stamped onto ctx so all downstream
+    functions — including constants resolution — can read it without being
+    passed it explicitly.
+
+    Each file transform is self-contained — a failure on one file does
+    not prevent processing of others.
     """
-    log = logging.getLogger(__name__)
-
-    # Resolve batch connection from config.
-    from rey_lib.config.ctx import find_in_ctx
-    batch_conn_name = ctx.db.batch_connection
-    batch_cfg       = find_by_name(ctx.db.connections, batch_conn_name)
+    log       = logging.getLogger(__name__)
+    batch_cfg = find_by_name(ctx.db.connections, ctx.db.batch_connection)
 
     sql_dir = Path("sql/sqlserver")
     if sql_dir.exists():
         sqlserver_utils.init_db(sql_dir)
 
     with sqlserver_utils.get_connection(batch_cfg) as batch_conn:
-        batch_id = app_db.start_batch(
-            ctx, batch_conn, f"lupo_loader: load — {ctx.env}"
-        )
+        app_db.start_batch(ctx, batch_conn, f"lupo_loader: transform — {ctx.env}")
+
         step_id = app_db.start_step(
-            ctx, batch_conn, batch_id,
+            ctx, batch_conn, ctx.batch_id,
+            severity=app_db.SEVERITY_INFO,
+            source="main",
+            message="Transform stage started.",
+        )
+
+        try:
+            _transform_all_sources(ctx, batch_conn)
+            app_db.end_step(ctx, batch_conn, step_id)
+            app_db.end_batch(ctx, batch_conn, ctx.batch_id)
+            log.info("Transform stage complete — BatchID=%d", ctx.batch_id)
+
+        except Exception as exc:
+            app_db.start_step(
+                ctx, batch_conn, ctx.batch_id,
+                severity=app_db.SEVERITY_ERROR,
+                source="main",
+                message=f"Transform stage failed: {exc}",
+                parent_step_id=step_id,
+            )
+            app_db.end_batch(ctx, batch_conn, ctx.batch_id)
+            raise
+
+
+def _transform_all_sources(ctx: Any, batch_conn: Any) -> None:
+    """
+    Iterate all configured data sources and transform each one.
+
+    Parameters
+    ----------
+    ctx : Any
+        Application context — ctx.batch_id is already set by start_batch.
+    batch_conn : pyodbc.Connection
+        Open connection to NaviControl for batch logging.
+    """
+    log = logging.getLogger(__name__)
+
+    for data_source in ctx.data_sources:
+        for transform_cfg in data_source.transforms:
+
+            step_id = app_db.start_step(
+                ctx, batch_conn, ctx.batch_id,
+                severity=app_db.SEVERITY_INFO,
+                source="transform",
+                message=(
+                    f"Transforming {data_source.name} / "
+                    f"{transform_cfg.name} v{transform_cfg.version}"
+                ),
+            )
+
+            count = transform_files(ctx, data_source, transform_cfg)
+
+            app_db.start_step(
+                ctx, batch_conn, ctx.batch_id,
+                severity=app_db.SEVERITY_INFO,
+                source="transform",
+                message=(
+                    f"Transformed {count} file(s) — "
+                    f"{data_source.name} / {transform_cfg.name} v{transform_cfg.version}"
+                ),
+                record_count=count,
+                parent_step_id=step_id,
+            )
+            app_db.end_step(ctx, batch_conn, step_id)
+
+            log.info(
+                "Transformed %d file(s) — %s / %s v%s",
+                count, data_source.name,
+                transform_cfg.name, transform_cfg.version,
+            )
+
+
+def _run_load(ctx: Any) -> None:
+    """
+    Load all pending files for all configured data sources.
+
+    Opens a batch in NaviControl, loads each data source, and closes
+    the batch on completion. batch_id is stamped onto ctx so all downstream
+    functions — including constants resolution — can read it without being
+    passed it explicitly.
+
+    Each file load is self-contained — a failure on one file does not
+    prevent processing of others.
+    """
+    log       = logging.getLogger(__name__)
+    batch_cfg = find_by_name(ctx.db.connections, ctx.db.batch_connection)
+
+    sql_dir = Path("sql/sqlserver")
+    if sql_dir.exists():
+        sqlserver_utils.init_db(sql_dir)
+
+    with sqlserver_utils.get_connection(batch_cfg) as batch_conn:
+        app_db.start_batch(ctx, batch_conn, f"lupo_loader: load — {ctx.env}")
+
+        step_id = app_db.start_step(
+            ctx, batch_conn, ctx.batch_id,
             severity=app_db.SEVERITY_INFO,
             source="main",
             message="Load stage started.",
         )
 
         try:
-            _load_all_sources(ctx, batch_conn, batch_id)
+            _load_all_sources(ctx, batch_conn)
             app_db.end_step(ctx, batch_conn, step_id)
-            app_db.end_batch(ctx, batch_conn, batch_id)
-            log.info("Load stage complete — BatchID=%d", batch_id)
+            app_db.end_batch(ctx, batch_conn, ctx.batch_id)
+            log.info("Load stage complete — BatchID=%d", ctx.batch_id)
 
         except Exception as exc:
             app_db.start_step(
-                ctx, batch_conn, batch_id,
+                ctx, batch_conn, ctx.batch_id,
                 severity=app_db.SEVERITY_ERROR,
                 source="main",
                 message=f"Load stage failed: {exc}",
                 parent_step_id=step_id,
             )
-            app_db.end_batch(ctx, batch_conn, batch_id)
+            app_db.end_batch(ctx, batch_conn, ctx.batch_id)
             raise
 
 
-def _load_all_sources(
-    ctx: Any,
-    batch_conn: Any,
-    batch_id: int,
-) -> None:
+def _load_all_sources(ctx: Any, batch_conn: Any) -> None:
     """
     Iterate all configured data sources and load each one.
 
     Parameters
     ----------
     ctx : Any
-        Application context.
+        Application context — ctx.batch_id is already set by start_batch.
     batch_conn : pyodbc.Connection
         Open connection to NaviControl for batch logging.
-    batch_id : int
-        Active BatchID.
     """
-    import functools
     log = logging.getLogger(__name__)
 
     for data_source in ctx.data_sources:
         for load_cfg in data_source.loads:
+
             # Resolve the load connection from config.
-            from rey_lib.config.ctx import find_in_ctx
             load_conn_name = load_cfg.load.connection
             load_cfg_db    = find_by_name(ctx.db.connections, load_conn_name)
 
@@ -186,7 +274,7 @@ def _load_all_sources(
                 )
 
                 step_id = app_db.start_step(
-                    ctx, batch_conn, batch_id,
+                    ctx, batch_conn, ctx.batch_id,
                     severity=app_db.SEVERITY_INFO,
                     source="file_loader",
                     message=f"Loading {data_source.name} / {load_cfg.name}",
@@ -194,19 +282,22 @@ def _load_all_sources(
 
                 rows = load_files(
                     ctx, load_conn, data_source, load_cfg,
-                    batch_id=batch_id,
                     on_reload=on_reload,
                 )
 
                 app_db.start_step(
-                    ctx, batch_conn, batch_id,
+                    ctx, batch_conn, ctx.batch_id,
                     severity=app_db.SEVERITY_INFO,
                     source="file_loader",
-                    message=f"Loaded {rows} row(s) — {data_source.name} / {load_cfg.name}",
+                    message=(
+                        f"Loaded {rows} row(s) — "
+                        f"{data_source.name} / {load_cfg.name}"
+                    ),
                     record_count=rows,
                     parent_step_id=step_id,
                 )
                 app_db.end_step(ctx, batch_conn, step_id)
+
                 log.info(
                     "Loaded %d row(s) — %s / %s",
                     rows, data_source.name, load_cfg.name,
@@ -232,7 +323,7 @@ def _parse_args() -> argparse.Namespace:
         "--stage",
         required=True,
         choices=sorted(_VALID_STAGES),
-        help="Stage to run: sync, load, or all.",
+        help="Stage to run: sync, transform, load, or all.",
     )
     return parser.parse_args()
 
