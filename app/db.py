@@ -1,9 +1,3 @@
-# --- replace ---
-"""
-Batch and BatchStep logging for lupo_loader.
-...
-"""
-# --- with ---
 """
 Database interaction layer for lupo_loader.
 
@@ -23,13 +17,12 @@ Stored procedures used:
     pUpd_Batch_End      Stamp BatchEndDT on completion
     pIns_BatchStep      Create a new batch step record
     pUpd_BatchStep_End  Stamp BatchStepEndDT on completion
-...
 """
-
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Optional
 
 import pyodbc
@@ -301,12 +294,6 @@ def end_step(
         log_exit(ctx, "end_step done", log)
 
 
-
-# --- add to __all__ ---
-"log_reload",
-
-# --- add after end_step ---
-
 def log_reload(
     ctx: Any,
     batch_conn: pyodbc.Connection,
@@ -376,6 +363,3 @@ def log_reload(
 
     finally:
         log_exit(ctx, "log_reload done", log)
-
-        
-                
