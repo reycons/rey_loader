@@ -22,8 +22,10 @@ Stored procedures used:
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
 
 import pyodbc
 
@@ -104,7 +106,7 @@ def start_batch(
         cursor = sqlserver_utils.call_proc(
             conn,
             _PROC_INS_BATCH,
-            [description],
+            [datetime.now(), description],
         )
         try:
             row = cursor.fetchone()
