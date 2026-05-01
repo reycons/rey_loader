@@ -118,7 +118,10 @@ def _run_load(ctx: Any) -> None:
     from rey_lib.config.ctx import find_in_ctx
     batch_conn_name = ctx.db.batch_connection
     batch_cfg       = find_in_ctx(ctx, "db.connections", batch_conn_name)
-    sqlserver_utils.init_db(Path("sql/sqlserver"))
+
+    sql_dir = Path("sql/sqlserver")
+    if sql_dir.exists():
+        sqlserver_utils.init_db(sql_dir)
 
     with sqlserver_utils.get_connection(batch_cfg) as batch_conn:
         batch_id = app_db.start_batch(
