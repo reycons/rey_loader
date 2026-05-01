@@ -175,7 +175,7 @@ def _transform_all_sources(ctx: Any, batch_conn: Any) -> None:
                 source="transform",
                 message=(
                     f"Transforming {data_source.name} / "
-                    f"{transform_cfg.name} v{transform_cfg.version}"
+                    f"{transform_cfg.name} {transform_cfg.version}"
                 ),
             )
 
@@ -187,7 +187,7 @@ def _transform_all_sources(ctx: Any, batch_conn: Any) -> None:
                 source="transform",
                 message=(
                     f"Transformed {count} file(s) — "
-                    f"{data_source.name} / {transform_cfg.name} v{transform_cfg.version}"
+                    f"{data_source.name} / {transform_cfg.name} {transform_cfg.version}"
                 ),
                 record_count=count,
                 parent_step_id=step_id,
@@ -195,7 +195,7 @@ def _transform_all_sources(ctx: Any, batch_conn: Any) -> None:
             app_db.end_step(ctx, batch_conn, step_id)
 
             log.info(
-                "Transformed %d file(s) — %s / %s v%s",
+                "Transformed %d file(s) — %s / %s %s",
                 count, data_source.name,
                 transform_cfg.name, transform_cfg.version,
             )
