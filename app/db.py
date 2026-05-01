@@ -106,7 +106,7 @@ def start_batch(
         cursor = sqlserver_utils.call_proc(
             conn,
             _PROC_INS_BATCH,
-            [datetime.now(), description],
+            [datetime.now(), description, None],  # BatchStartDT, description, BatchID output
         )
         try:
             row = cursor.fetchone()
