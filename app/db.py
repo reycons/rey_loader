@@ -74,7 +74,7 @@ def start_batch(
     ctx: Any,
     conn: pyodbc.Connection,
     description: str,
-) -> int:
+) -> None:
     """
     Create a Batch record and return the new BatchID.
 
@@ -122,8 +122,9 @@ def start_batch(
 
 
         conn.commit()
+        object.__setattr__(ctx, "batch_id", batch_id)
         log.info("Batch started: BatchID=%d  description=%s", batch_id, description)
-        return batch_id
+
 
     except DatabaseError:
         conn.rollback()
@@ -247,7 +248,7 @@ def start_step(
             step_id = int(row[0])
         finally:
             cursor.close()
-                        
+
 
         conn.commit()
         log.debug(
