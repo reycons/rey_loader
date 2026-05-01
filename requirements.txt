@@ -1,0 +1,8 @@
+rey_lib>=0.9.2
+pyodbc>=5.0.0
+pyyaml>=6.0.2
+python-dotenv>=1.0.1
+pytest>=8.2.0
+pytest-mock>=3.14.0
+ruff>=0.4.4
+black>=24.4.2
