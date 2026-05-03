@@ -15,7 +15,7 @@
 # Each run produces a distinct log file.
 # -----------------------------------------------------------------------------
 
-log_path: D:/lupo_loader/logs/lupo_loader.{operation}.{timestamp}.log
+log_path: ~/python/logs/lupo_loader/lupo_loader.{operation}.{timestamp}.log
 
 # -----------------------------------------------------------------------------
 # Data handling
