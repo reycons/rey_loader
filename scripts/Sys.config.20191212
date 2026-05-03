@@ -1,0 +1,119 @@
+<Configuration>
+  <Notes>
+    <Note>
+		  Use this command to create securestring for the password and user names
+		  read-host "Enter Password or UserName" -AsSecureString | convertFrom-SecureString
+
+	  </Note>
+    <Note>Copy Section can be used to sync folder across windows servers also</Note>
+  </Notes>
+  <SQLServer>
+    <Server Name="(Local)" Database="NaviControl">
+      <Commands>
+        <Command Order="1" sql="execute NaviControl.dbo.pBCP_FileByID 108">
+        </Command>
+        <Command Order="2" sql="execute NaviControl.dbo.pBCP_FileByID 109">
+        </Command>
+        <Command Order="3" sql="execute NaviControl.dbo.pBCP_FileByID 79">
+        </Command>
+        <Command Order="4" sql="execute NaviControl.dbo.pBCP_FileByID 80">
+        </Command>
+      </Commands>
+    </Server>
+  </SQLServer>
+  <IndexHeader>
+    <HeaderRow>LogName|LogDate|LogRunTime|FileName|FileLength|FileDate|RowCount|Header</HeaderRow>
+  </IndexHeader>
+  <IndexLocations>
+    <IndexFileName>D:\Navi\Bin\Index\HandleFiles.[Name].[DateString].index</IndexFileName>
+    <IndexLocation>
+      <Name>MICSFutures</Name>
+      <Folder>D:\Navi\Sync\ABN\LupoSecurities\MICS*[DateString]*.csv</Folder>
+      <DateFormat>yyyMMdd</DateFormat>
+      <Lookback>-1</Lookback>
+    </IndexLocation>
+    <IndexLocation>
+      <Name>MICSSecurities</Name>
+      <Folder>D:\Navi\Sync\ABN\LupoFutures\MICS*[DateString]*.csv</Folder>
+      <DateFormat>yyyMMdd</DateFormat>
+      <Lookback>-1</Lookback>
+    </IndexLocation>
+	  <IndexLocation>
+		  <Name>EDFMan</Name>
+		  <Folder>D:\Navi\Sync\EDFMan\Lupo\[DateString]\*.csv</Folder>
+		  <DateFormat>yyyMMdd</DateFormat>
+		  <Lookback>-1</Lookback>
+	  </IndexLocation>
+  </IndexLocations>
+  <FTP>
+    <StartTime>9/23/2019 1:24:08 PM</StartTime>
+    <EndTime>9/23/2019 1:24:29 PM</EndTime>
+    <PSFTPPath>D:\Navi\Bin\psftp.exe</PSFTPPath>
+    <Server Description="ABN Amro wspftp previous trading day files">
+      <FTPCommandFile>D:\Navi\Bin\ftp\FuturesCommands.ftp</FTPCommandFile>
+      <HostName>sftp.us.abnamroclearing.com</HostName>
+      <Protocol>Sftp</Protocol>
+      <SshHostKeyFingerprint>ssh-dss 1024 1FxM1gax1xdrEEpYPUh29F2YvieU75Wz/ZVzvWEGlgo=</SshHostKeyFingerprint>
+      <UserName>wspftp</UserName>
+      <Password>01000000d08c9ddf0115d1118c7a00c04fc297eb01000000e3f6d5b54b13fc448d504e2d986d00ba000000000200000000001066000000010000200000000e35934a7bca6debd47bb5d8d37423a5b5ab8d9fe273ed7359197a70386f8ec8000000000e800000000200002000000073e58fdaf6ed2efa68477f6feec6df89e6b34d894287343d29244fc2a1b0dcb420000000c9b542dee643eb761b05595eb92bbc8af8bdc6a1950401cfbb2c7bb68a3a4fc84000000074ffe7ab81ad901bcb1dc310615130244f8a749bf4a96620314c6ebf64123aff78467bdb3bf6f08cd518da8991a531a2ea6612616cfb6968bd022cf2e923583f</Password>
+      <Commands>
+  lcd D:\Navi\Sync\ABN\MICSFutures\
+  mget ./MICS/*[DateString]*
+  lcd D:\Navi\Sync\ABN\LupoFutures
+  mget *[DateString]*
+  quit
+	  </Commands>
+      <DateFormat>yyyMMdd</DateFormat>
+      <Lookback>-1</Lookback>
+    </Server>
+    <Server Description="ABN Amro sallersonftp previous trading day files">
+      <FTPCommandFile>D:\Navi\Bin\ftp\SecuritiesCommands.ftp</FTPCommandFile>
+      <HostName>sftp.us.abnamroclearing.com</HostName>
+      <Protocol>Sftp</Protocol>
+      <SshHostKeyFingerprint>ssh-dss 1024 1FxM1gax1xdrEEpYPUh29F2YvieU75Wz/ZVzvWEGlgo=</SshHostKeyFingerprint>
+      <UserName>sallersonftp</UserName>
+      <Password>01000000d08c9ddf0115d1118c7a00c04fc297eb01000000a2b3a1cb7e141b41b5b64fabf6a2f47500000000020000000000106600000001000020000000fc5bca9c2f81bd517ca889410690f466582f21078081e1784511d6984d2a5a28000000000e800000000200002000000076b1f84c2c5efc1ae6ea88f2b8c92b1b303b14ad93b441c8b1f450f5e184f35f20000000830ea06827c2deec00ad2e6d97d914d33c3358327c44143fdea88945ba142534400000009a19784912aecfe75b85cf89206c6bd9d6eecab689899becb012f9787bcc76330d8623361e4b921183170a70c4666dce73523222250bda2532ab36c9c4814072</Password>
+      <Commands>
+		  lcd D:\Navi\Sync\ABN\MICSSecurities\
+		  mget ./MICS/*[DateString]*
+		  lcd D:\Navi\Sync\ABN\LupoSecurities
+		  mget *[DateString]*
+		  quit
+	  </Commands>
+      <DateFormat>yyyMMdd</DateFormat>
+      <Lookback>-1</Lookback>
+    </Server>
+    <Server Description="EDF Man previous trading day files">
+      <FTPCommandFile>D:\Navi\Bin\ftp\EDFManCommands.ftp</FTPCommandFile>
+      <HostName>sftp.edfmancapital.com</HostName>
+      <Protocol>Sftp</Protocol>
+      <SshHostKeyFingerprint>ssh-rsa 1024 MKA9n3CYF8dY+j9P713bUoWelyJtFdv8gNpfn8pkzoc=</SshHostKeyFingerprint>
+      <UserName>lupo</UserName>
+      <Password>01000000d08c9ddf0115d1118c7a00c04fc297eb01000000234a0767ec61a3409259652f831ab5f100000000020000000000106600000001000020000000033bf4c22926725ad79f35264a465ba59138523ebc025a4ef0d8385df3d8be97000000000e8000000002000020000000125d01f729ad11f420751b0ea4b3d3f4717a437a88a6ac6b029933299cc8f90a3000000093434640f3c951f6889fd57eb006d6f2b223a0ba0e17d3a991686e0faf27f4c2da2abb85e2adfa4e090df6e66775cddb400000007c33e16d35cc2ccb0418fcf5351fe1e87b7c0ca3f1d1a5cf89688ed9d352e1eec4ed2a955ba633d3965976f956eb5baefc29519a32fa1f1e5430aab8108588c2</Password>
+      <Commands>
+		  lcd D:\Navi\Sync\EDFMan\LupoSecurities
+		  cd Equities
+		  mget -r ./[DateString]/*
+		  quit
+	  </Commands>
+      <DateFormat>yyyMMdd</DateFormat>
+      <Lookback>-1</Lookback>
+    </Server>
+  </FTP>
+  <Copy>
+    <Folder>
+      <From>D:\Navi\Sync\ABN\LupoSecurities\</From>
+      <To>D:\WQT\Sync\ABNAmro\Sallerson\</To>
+      <Filter>*[DateString]*</Filter>
+      <DateFormat>yyyMMdd</DateFormat>
+      <Lookback>-1</Lookback>
+    </Folder>
+    <Folder>
+      <From>D:\Navi\Sync\ABN\LupoFutures\</From>
+      <To>D:\WQT\Sync\ABNAmro\WSP\</To>
+      <Filter>*[DateString]*</Filter>
+      <DateFormat>yyyMMdd</DateFormat>
+      <Lookback>-1</Lookback>
+    </Folder>
+  </Copy>
+</Configuration>
