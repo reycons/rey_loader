@@ -10,9 +10,8 @@ db:
       host:     (local)
       driver:   ODBC Driver 17 for SQL Server
       port:     1433
-      # user and password injected from .env at startup via inject_secrets()
-      # SQLSERVER_NAVICONTROL_USER / SQLSERVER_NAVICONTROL_PASSWORD
-      # Omit user entirely to use Windows Authentication
+      authentication:
+        type: trusted_connection  # Windows Authentication (no user/password)
 
   # Designates which connection owns batch and step logging.
   # db.py reads this at startup to open the correct connection.

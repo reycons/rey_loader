@@ -30,12 +30,12 @@ data_sources:
     # -------------------------------------------------------------------------
 
     paths:
-      inbox_path:       D:\RApps\FTP\Advantage
-      processing_path:  D:\RApps\DataFeeds\Advantage\Processing
-      converted_path:   D:\RApps\DataFeeds\Advantage\Converted
-      loaded_path:      D:\RApps\DataFeeds\Advantage\Loaded
-      rejected_path:    D:\RApps\DataFeeds\Advantage\Rejected
-      archive_path:     D:\RApps\DataFeeds\Advantage\Archive
+      inbox_path:       'D:\RApps\FTP\Advantage'
+      processing_path:  'D:\RApps\DataFeeds\Advantage\Processing'
+      converted_path:   'D:\RApps\DataFeeds\Advantage\Converted'
+      loaded_path:      'D:\RApps\DataFeeds\Advantage\Loaded'
+      rejected_path:    'D:\RApps\DataFeeds\Advantage\Rejected'
+      archive_path:     'D:\RApps\DataFeeds\Advantage\Archive'
 
     # -------------------------------------------------------------------------
     # Transforms
@@ -128,8 +128,10 @@ data_sources:
           broker:            "advantage"
           record_source:     "CSV Import"
           transform_version: "v01"
-          source_file:       "{incoming_file_name}"   # full path of the original inbox file
-          archive_file:      "{archive_path}"         # archive folder path stamped on each row
+          source_file:       "\"{incoming_file_name}\""   # full path of the original inbox file
+          archive_file:      "\"{archive_path}\""         # archive folder path stamped on each row
+          log_file:          "\"{ctx.log_file}\""         # full path of the session log file
+          batch_id:          "{ctx.batch_id}"         # batch ID from begin_batch output param
 
         # -----------------------------------------------------------------------
         # Column mapping: DB column name → source file column name
