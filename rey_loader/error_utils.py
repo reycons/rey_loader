@@ -1,17 +1,27 @@
-"""
-App-specific exception types for rey_loader.
+"""rey_loader — application exception hierarchy.
 
-All rey_loader exceptions extend AppError from rey_lib so that the
-top-level handler in main.py can catch them uniformly. Raise these
-instead of the base AppError when the error is specific to rey_loader.
+All application exceptions extend rey_lib's AppError so callers can catch
+at the base level or narrow to specific types.
+
+Public API
+----------
+ReyLoaderError    Base exception for all rey_loader errors.
 """
 
 from __future__ import annotations
 
-from rey_lib.errors.error_utils import AppError
+from rey_lib.errors.error_utils import AppError, ConfigError, DatabaseError
 
-__all__ = ["ReyLoaderError"]
+__all__ = [
+    "ReyLoaderError",
+    "ConfigError",
+    "DatabaseError",
+]
 
 
 class ReyLoaderError(AppError):
-    """Raised for any rey_loader-specific runtime failure."""
+    """Base exception for all rey_loader application errors."""
+
+
+class LLMError(TradeAnalyzerError):
+    """Raised when an LLM API call fails or returns an unexpected response."""
