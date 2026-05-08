@@ -1,5 +1,5 @@
 """
-lupo_loader — entry point.
+rey_loader — entry point.
 
 Orchestrates the file ingestion pipeline. Each stage is self-contained
 and can be run independently via --stage. The 'all' stage runs the full
@@ -30,7 +30,7 @@ from rey_lib.errors.error_utils import AppError
 from rey_lib.files.file_loader import load_files, transform_files
 from rey_lib.logs.log_utils import setup_logging
 
-from app import db as app_db
+from rey_loader import db as app_db
 
 __all__: list[str] = []
 
@@ -50,7 +50,7 @@ def main() -> None:
 
     setup_logging(ctx, operation=args.stage)
     log = logging.getLogger(__name__)
-    log.info("lupo_loader starting — env=%s stage=%s", args.env, args.stage)
+    log.info("rey_loader starting — env=%s stage=%s", args.env, args.stage)
 
     try:
         if args.stage in ("sync", "all"):
@@ -62,7 +62,7 @@ def main() -> None:
         if args.stage in ("load", "all"):
             _run_load(ctx)
 
-        log.info("lupo_loader complete.")
+        log.info("rey_loader complete.")
         sys.exit(0)
 
     except AppError as exc:
@@ -82,7 +82,7 @@ def _run_sync(ctx: Any) -> None:
     """
     Invoke ftp_sync as a subprocess.
 
-    ftp_sync is a fully independent application — lupo_loader calls it
+    ftp_sync is a fully independent application — rey_loader calls it
     via subprocess and checks the exit code. All ftp_sync config and
     state live in the ftp_sync project directory.
     """
@@ -126,7 +126,7 @@ def _run_transform(ctx: Any) -> None:
         sqlserver_utils.init_db(sql_dir)
 
     with sqlserver_utils.get_connection(batch_cfg) as batch_conn:
-        app_db.start_batch(ctx, batch_conn, f"lupo_loader: transform — {ctx.env}")
+        app_db.start_batch(ctx, batch_conn, f"rey_loader: transform — {ctx.env}")
 
         step_id = app_db.start_step(
             ctx, batch_conn, ctx.batch_id,
@@ -221,7 +221,7 @@ def _run_load(ctx: Any) -> None:
         sqlserver_utils.init_db(sql_dir)
 
     with sqlserver_utils.get_connection(batch_cfg) as batch_conn:
-        app_db.start_batch(ctx, batch_conn, f"lupo_loader: load — {ctx.env}")
+        app_db.start_batch(ctx, batch_conn, f"rey_loader: load — {ctx.env}")
 
         step_id = app_db.start_step(
             ctx, batch_conn, ctx.batch_id,
@@ -311,7 +311,7 @@ def _load_all_sources(ctx: Any, batch_conn: Any) -> None:
 def _parse_args() -> argparse.Namespace:
     """Parse and validate CLI arguments."""
     parser = argparse.ArgumentParser(
-        description="lupo_loader — file ingestion orchestrator"
+        description="rey_loader — file ingestion orchestrator"
     )
     parser.add_argument(
         "--env",
