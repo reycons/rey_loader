@@ -149,7 +149,10 @@ def _run_transform(ctx: Any) -> None:
                 parent_step_id=step_id,
             )
             app_db.end_batch(ctx, batch_conn, ctx.batch_id)
-            raise(ctx: Any, batch_conn: Any) -> None:
+            raise
+
+
+def _transform_all_sources(ctx: Any, batch_conn: Any) -> None:
     """
     Iterate all configured data sources and transform each one.
 
