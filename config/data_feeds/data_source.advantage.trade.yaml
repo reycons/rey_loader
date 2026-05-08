@@ -128,14 +128,10 @@ data_sources:
           broker:            "advantage"
           record_source:     "CSV Import"
           transform_version: "v01"
-          source_file:                               # full path of the original inbox file
-            value: ctx.current_file_path
-            quote: '"'
-          archive_file:                              # archive_path dir + current filename
-            value: ctx.archive_path
-            quote: '"'
-          log_file:          ctx.log_file            # full path of the session log file
-          batch_id:          ctx.batch_id            # batch ID from begin_batch output param
+          source_file:       ctx.current_file_path    # full path of the original inbox file
+          archive_file:      ctx.archive_path         # archive_path dir + current filename
+          log_file:          ctx.log_file             # full path of the session log file
+          batch_id:          ctx.batch_id             # batch ID from begin_batch output param
 
         # -----------------------------------------------------------------------
         # Column mapping: DB column name → source file column name
