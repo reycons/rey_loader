@@ -1,0 +1,17 @@
+# =============================================================================
+# Database Connection: SQL Server — NaviStage
+# =============================================================================
+
+db:
+  connections:
+    - name:     SQLServer_NaviStage_local
+      provider: SQLServer
+      database: NaviStage
+      host:     (local)
+      driver:   ODBC Driver 17 for SQL Server
+      authentication:
+        type: trusted_connection  # Windows Authentication (no user/password)
+      port:     1433
+      # user and password injected from .env at startup via inject_secrets()
+      # SQLSERVER_NAVISTAGE_USER / SQLSERVER_NAVISTAGE_PASSWORD
+      # Omit user entirely to use Windows Authentication
