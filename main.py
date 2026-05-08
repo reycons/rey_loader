@@ -67,11 +67,11 @@ def main() -> None:
         sys.exit(0)
 
     except AppError as exc:
-        handle_exception(exc)
+        handle_exception(log, exc, "rey_loader pipeline error")
         sys.exit(1)
 
     except Exception as exc:  # noqa: BLE001  — top-level safety net only
-        handle_exception(exc)
+        handle_exception(log, exc, "Unexpected error in rey_loader")
         sys.exit(2)
 
 

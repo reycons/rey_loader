@@ -1,0 +1,375 @@
+# =============================================================================
+# Data Source: Advantage
+#
+# Defines the full pipeline for Advantage futures trade files:
+#   1. transforms  — how to read, validate, and reshape raw files from the FTP
+#                    inbox into a clean output format ready for loading
+#   2. loads       — how to take the transformed output and load it into the
+#                    database, including file movements on success and failure
+#
+# Each transform and load is versioned so that format changes can be handled
+# by adding a new version rather than modifying existing logic.
+# =============================================================================
+
+data_sources:
+
+  - name: advantage
+    max_files_per_run: 10   # maximum files loaded per run — prevents backlog flooding
+
+    # -------------------------------------------------------------------------
+    # Paths
+    #
+    # All folder locations for this data source. These are referenced by name
+    # in transform and load movements below — never hard-coded in those sections.
+    #
+    #   inbox_path      Files arrive here from the FTP sync stage
+    #   processing_path Files move here after a successful transform
+    #   loaded_path     Files move here after a successful database load
+    #   rejected_path   Files move here when any stage fails
+    #   archive_path    Transformed output files are archived here after loading
+    # -------------------------------------------------------------------------
+
+    paths:
+      inbox_path:       D:\RApps\FTP\Advantage
+      processing_path:  D:\RApps\DataFeeds\Advantage\Processing
+      converted_path:   D:\RApps\DataFeeds\Advantage\Converted
+      loaded_path:      D:\RApps\DataFeeds\Advantage\Loaded
+      rejected_path:    D:\RApps\DataFeeds\Advantage\Rejected
+      archive_path:     D:\RApps\DataFeeds\Advantage\Archive
+
+    # -------------------------------------------------------------------------
+    # Transforms
+    #
+    # A transform defines how to read a raw source file and produce a clean
+    # output file ready for loading. Each transform is versioned — when the
+    # source file format changes, add a new version rather than editing this one.
+    #
+    # Transform stages:
+    #   1. Match files in inbox_path using file_pattern
+    #   2. Validate the header against the expected header string
+    #   3. Apply row_filter to discard invalid rows
+    #   4. Map source columns to DB columns via columns:
+    #   5. Apply field_transforms to clean and normalize values
+    #   6. Inject constants (file names, record source)
+    #   7. Write output file using the output pattern
+    #   8. Move source file per movements: success or failure
+    # -------------------------------------------------------------------------
+
+    transforms:
+
+      # -----------------------------------------------------------------------
+      # Transform: advantage_transactions v01
+      #
+      # Reads the raw Advantage futures trade file. One row per trade.
+      # File arrives as a CSV with no quoting, pipe-delimited records.
+      # Date values use yyyymmdd format with no separators.
+      #
+      # Known characteristics of this format:
+      #   - No RECORD ID column — trades identified by TRADE DATE + ACCOUNT
+      #   - PROMPT DATE is frequently blank for non-futures rows
+      #   - STRIKE PRICE and PUT/CALL are blank for outright futures
+      #   - BUY/SELL is a text flag in this version (vs. numeric in others)
+      #   - ENTRY DATE uses ISO separators (yyyy-mm-dd) unlike TRADE DATE
+      #   - Fee columns default to 0 when not applicable — treat as numeric
+      # -----------------------------------------------------------------------
+
+      - name:         advantage_transactions
+        version:      "v01"
+        file_type:    CSV
+        encoding:     utf-8-sig   # handles BOM-prefixed files from Windows exports
+        date_format:  "yyyymmdd"  # used for file_pattern token substitution only
+        file_pattern: "tran_{yyyymmdd}.csv"   # glob pattern to match inbox files
+
+        # Expected header row — validated against the first line of each file.
+        # If the file header does not match, the file is rejected before any
+        # rows are processed.
+        header: "TRADE DATE,OFFICE,ACCOUNT,A/C TYPE,BUY/SELL,QTY,EXCH ID,CONTRACT NAME,YYYY/MM,PROMPT DATE,STRIKE PRICE,PUT/CALL,PRINTABLE PRICE,TRADE TYPE,CARD/ORDER #,CURRENCY CODE,STYPE,FUTURES CODE,SUB CUSIP,CUSIP,GMI FIRM #,SALESCODE #,COMMENT CODE,GIVE IN/OUT,GIVE IN FIRM,TRADE PRICE,SPREAD,OPEN/CLOSE,EXECUTING BROKER,OPPOSITE BROKER,OPPOSITE FIRM,COMMISSION,COMM A/C TYPE,FEE 1 (CLEARING),FEE 1 A/C TYPE,FEE 2 (EXCHANGE),FEE 2 A/C TYPE,FEE 3 (NFA),FEE 3 A/C TYPE,BROKERAGE CHARGE,BKG A/C TYPE,GIVE IN CHARGE,G/I A/C TYPE,OTHER CHARGE,OTHER A/C TYPE,WIRE CHARGE,WIRE A/C TYPE,ENTRY DATE,DELETE CODE,GMI TRACER #,JOURNAL SEQUENCE,ROUND TURN/HALF TURN,DESCRIPTION,JOURNAL RECORD,SUB ACCOUNT,COMMENT F CODE,MISC.,2 DIGIT EXCHANGE,FUTURE/OPTION,MULTIPLIER,CLOSE PRICE,XTP ACCOUNT"
+
+        # Output file written after a successful transform.
+        # This file is what the load stage picks up — not the original inbox file.
+        output:
+          output_dest: converted_path
+          version:     "v01"
+          file:
+            name: "{base_file_name}_{version}.csv"
+        movements:
+          success:
+            # Inbox file moves to processing after a clean transform.
+            # It stays here until the load stage completes.
+            - move:
+                from: inbox_path
+                to:   processing_path
+          failure:
+            # Any transform error — bad header, row errors — sends the file
+            # to rejected. Error details are written to the log.
+            - move:
+                from: inbox_path
+                to:   rejected_path
+
+        # row_filter is empty — all rows are processed.
+        # To discard rows by column value, define a filter here.
+        # Example: discard rows where TRADE DATE is not a valid date.
+        row_filter: []
+
+        # -----------------------------------------------------------------------
+        # Constants
+        #
+        # Values injected into every output row at transform time.
+        # Available as keys in the row dict when _persist_loaded_file is called.
+        #
+        #   broker             identifies the data provider / clearing firm
+        #   record_source      describes how this record entered the system
+        #   transform_version  version tag for lineage tracking
+        #   source_file        full path of the original inbox file
+        #   archive_file       archive folder — stamped on each row for lineage
+        # -----------------------------------------------------------------------
+
+        constants:
+          broker:            "advantage"
+          record_source:     "CSV Import"
+          transform_version: "v01"
+          source_file:       "{incoming_file_name}"   # full path of the original inbox file
+          archive_file:      "{archive_path}"         # archive folder path stamped on each row
+
+        # -----------------------------------------------------------------------
+        # Column mapping: DB column name → source file column name
+        #
+        # Each entry maps the name the database expects to the column header
+        # in the source file. field_transforms below handle cleaning and
+        # type conversion after this mapping is applied.
+        #
+        # Columns not listed here are either:
+        #   - Injected as constants (see constants: above)
+        #   - Derived entirely by field_transforms with no direct source column
+        #   - Left NULL (optional fields not present in this file version)
+        # -----------------------------------------------------------------------
+
+        columns:
+          trade_date:           "TRADE DATE"      # yyyymmdd — transformed below
+          office:               "OFFICE"          # originating office code
+          account:              "ACCOUNT"         # clearing account identifier
+          ac_type:              "A/C TYPE"        # account type code
+          buy_sell:             "BUY/SELL"        # trade direction flag
+          qty:                  "QTY"             # contract quantity
+          exch_id:              "EXCH ID"         # exchange identifier (e.g. CBT)
+          contract_name:        "CONTRACT NAME"   # commodity name (e.g. SOYBEANS)
+          yyyy_mm:              "YYYY/MM"         # delivery period code (e.g. 202605)
+          prompt_date:          "PROMPT DATE"     # delivery date — blank for spot
+          strike_price:         "STRIKE PRICE"    # options only — blank for futures
+          put_call:             "PUT/CALL"        # options only — blank for futures
+          printable_price:      "PRINTABLE PRICE" # display price
+          trade_type:           "TRADE TYPE"      # execution type code
+          card_order_no:        "CARD/ORDER #"    # order reference number
+          currency_code:        "CURRENCY CODE"   # settlement currency
+          stype:                "STYPE"           # sub-type flag
+          futures_code:         "FUTURES CODE"    # internal futures product code
+          sub_cusip:            "SUB CUSIP"       # sub-identifier for the instrument
+          cusip:                "CUSIP"           # instrument identifier
+          gmi_firm_no:          "GMI FIRM #"      # GMI clearing firm number
+          salescode_no:         "SALESCODE #"     # salesperson code
+          comment_code:         "COMMENT CODE"    # trade comment flag
+          give_in_out:          "GIVE IN/OUT"     # give-in / give-out indicator
+          give_in_firm:         "GIVE IN FIRM"    # counterparty firm for give trades
+          trade_price:          "TRADE PRICE"     # executed price
+          spread:               "SPREAD"          # spread leg indicator
+          open_close:           "OPEN/CLOSE"      # position open or close flag
+          executing_broker:     "EXECUTING BROKER"
+          opposite_broker:      "OPPOSITE BROKER"
+          opposite_firm:        "OPPOSITE FIRM"
+          commission:           "COMMISSION"      # broker commission amount
+          comm_ac_type:         "COMM A/C TYPE"   # account type for commission charge
+          fee_1_clearing:       "FEE 1 (CLEARING)"
+          fee_1_ac_type:        "FEE 1 A/C TYPE"
+          fee_2_exchange:       "FEE 2 (EXCHANGE)"
+          fee_2_ac_type:        "FEE 2 A/C TYPE"
+          fee_3_nfa:            "FEE 3 (NFA)"     # NFA regulatory fee
+          fee_3_ac_type:        "FEE 3 A/C TYPE"
+          brokerage_charge:     "BROKERAGE CHARGE"
+          bkg_ac_type:          "BKG A/C TYPE"
+          give_in_charge:       "GIVE IN CHARGE"
+          gi_ac_type:           "G/I A/C TYPE"
+          other_charge:         "OTHER CHARGE"
+          other_ac_type:        "OTHER A/C TYPE"
+          wire_charge:          "WIRE CHARGE"
+          wire_ac_type:         "WIRE A/C TYPE"
+          entry_date:           "ENTRY DATE"      # yyyy-mm-dd — transformed below
+          delete_code:          "DELETE CODE"     # trade cancellation flag
+          gmi_tracer_no:        "GMI TRACER #"    # GMI internal reference
+          journal_sequence:     "JOURNAL SEQUENCE"
+          round_turn_half_turn: "ROUND TURN/HALF TURN" # commission basis flag
+          description:          "DESCRIPTION"     # human-readable trade description
+          journal_record:       "JOURNAL RECORD"
+          sub_account:          "SUB ACCOUNT"
+          comment_f_code:       "COMMENT F CODE"
+          misc:                 "MISC."
+          two_digit_exchange:   "2 DIGIT EXCHANGE" # short exchange code
+          future_option:        "FUTURE/OPTION"    # F = future, O = option
+          multiplier:           "MULTIPLIER"       # contract size multiplier
+          close_price:          "CLOSE PRICE"      # settlement price for the day
+          xtp_account:          "XTP ACCOUNT"      # external trading platform account
+
+        # -----------------------------------------------------------------------
+        # Field transforms
+        #
+        # Applied after column mapping. Each entry names a DB column and defines
+        # how to clean or convert its value before writing to the output file.
+        #
+        # Types supported:
+        #   date      — parse string to date using format; allow_blank skips
+        #               blank values rather than raising an error
+        #   numeric   — strip non-numeric characters and parse as decimal;
+        #               allow_blank treats blank as NULL rather than 0
+        #
+        # Columns with no transform entry are passed through as-is (varchar).
+        # -----------------------------------------------------------------------
+
+        field_transforms:
+
+          # TRADE DATE arrives as yyyymmdd with no separators — e.g. 20251016
+          trade_date:
+            type:   date
+            format: "%Y%m%d"
+
+          # PROMPT DATE is the futures delivery date, same format as TRADE DATE.
+          # Frequently blank for non-delivery rows — allow_blank prevents errors.
+          prompt_date:
+            type:        date
+            format:      "%Y%m%d"
+            allow_blank: true
+
+          # ENTRY DATE uses ISO separators unlike the other date columns.
+          # Sample value: 2026-04-24
+          entry_date:
+            type:   date
+            format: "%Y-%m-%d"
+
+          # YYYY/MM is a delivery period code — e.g. 202605 means June 2026.
+          # Kept as varchar; SQL Server formats it as needed downstream.
+
+          # QTY may contain thousands separators in some file variants.
+          qty:
+            type:        numeric
+            strip_chars: ","
+
+          # STRIKE PRICE is blank for outright futures — allow_blank → NULL.
+          strike_price:
+            type:        numeric
+            allow_blank: true
+
+          printable_price:
+            type:        numeric
+
+          trade_price:
+            type:        numeric
+
+          # All fee and charge columns default to 0 in the file when not
+          # applicable. Parsed as numeric so SQL Server receives clean decimals.
+          commission:
+            type:        numeric
+
+          fee_1_clearing:
+            type:        numeric
+
+          fee_2_exchange:
+            type:        numeric
+
+          fee_3_nfa:
+            type:        numeric
+
+          brokerage_charge:
+            type:        numeric
+
+          give_in_charge:
+            type:        numeric
+
+          other_charge:
+            type:        numeric
+
+          wire_charge:
+            type:        numeric
+
+          # Contract size — e.g. 5000.00 for CBOT Soybeans
+          multiplier:
+            type:        numeric
+
+          # Settlement price for the trading day
+          close_price:
+            type:        numeric
+
+    # -------------------------------------------------------------------------
+    # Loads
+    #
+    # A load defines how to pick up transform output files from converted_path
+    # and insert them into the database via the on_load_file callback.
+    #
+    # The load stage runs independently of the transform stage — it picks up
+    # converted files waiting in converted_path matching the pickup_pattern.
+    #
+    # Load stages:
+    #   1. Find output files in converted_path matching pickup_pattern
+    #   2. Call on_load_file callback to persist rows to the database
+    #   3. Move files per movements: success or failure
+    # -------------------------------------------------------------------------
+
+    loads:
+
+      # -----------------------------------------------------------------------
+      # Load: advantage_transactions v01
+      #
+      # Picks up transformed v01 output files from converted_path and bulk
+      # inserts them into the staging database via sqlserver_utils.bulk_insert.
+      #
+      # name must match the transform name above so load_files can locate
+      # the correct transform config for column mapping and type info.
+      # -----------------------------------------------------------------------
+
+      - name:           advantage_transactions   # must match transform name above
+        version:        "v01"
+        source:         converted_path           # path key — scanned for pending files
+        pickup_pattern: "tran_*_{version}.csv"   # {version} substituted at runtime
+
+        load:
+          connection:        SQLServer_NaviStage_local
+          destination_table: NaviStage.Advantage_SCH.transaction
+          file_id_column:    incoming_file_name
+          batch_id_column:   BatchID
+
+        movements:
+          success:
+            # Source file moves from processing to loaded after a clean insert.
+            - move:
+                from: processing_path
+                to:   loaded_path
+            # Converted output file is archived.
+            - move:
+                from: converted_path
+                to:   archive_path
+          failure:
+            # Transform-stage source file is rejected on any load error.
+            - move:
+                from: processing_path
+                to:   rejected_path
+            # Converted output is deleted to avoid stale files accumulating.
+            - delete:
+                from: converted_path
+
+    # -------------------------------------------------------------------------
+    # Hooks
+    #
+    # Named sql_config entries (defined in config/app/sql_configs.yaml) that
+    # run at specific points in the pipeline for this data source.
+    #
+    #   pre_transform  — fires before transform_files
+    #                    begin_batch inserts a dbo.Batch row and returns BatchID;
+    #                    BatchID is written to ctx.batch_id and injected into
+    #                    every transformed row automatically via row_column
+    #
+    #   post_load      — fires after all load configs for this source complete
+    #                    end_batch stamps the batch end time on the dbo.Batch row
+    # -------------------------------------------------------------------------
+
+    hooks:
+      pre_transform:
+        - begin_batch
+      post_load:
+        - end_batch
