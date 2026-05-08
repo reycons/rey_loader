@@ -1,5 +1,5 @@
 # =============================================================================
-# Lupo Loader — Main Configuration (dev)
+# Rey Loader — Main Configuration (dev)
 #
 # Singleton values and global settings only.
 # Named instances live in sub-config files under config/db/ and config/data_feeds/

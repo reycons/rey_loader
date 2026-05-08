@@ -1,7 +1,7 @@
 """
-Database interaction layer for lupo_loader.
+Database interaction layer for rey_loader.
 
-All NaviControl database calls for lupo_loader go through this module.
+All NaviControl database calls for rey_loader go through this module.
 No raw pyodbc calls are permitted in any other app module — all
 interactions go through sqlserver_utils, called from here.
 
@@ -21,17 +21,18 @@ Stored procedures used:
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-
-import pyodbc
+if TYPE_CHECKING:
+    import pyodbc
 
 from rey_lib.db import sqlserver_utils
 from rey_lib.errors.error_utils import DatabaseError
-from rey_lib.logs.log_utils import log_enter, log_exit
+from rey_lib.logs.log_utils import get_logger, log_enter, log_exit
+
+_logger = get_logger(__name__)
 
 __all__ = [
     "SEVERITY_DEBUG",
@@ -44,8 +45,6 @@ __all__ = [
     "end_step",
     "log_reload",
 ]
-
-log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Severity level constants — match NaviControl conventions
@@ -79,7 +78,7 @@ def start_batch(
     Create a Batch record and return the new BatchID.
 
     Calls pIns_Batch with the current time as BatchStartDT.
-    configID is always NULL — not used by lupo_loader.
+    configID is always NULL — not used by rey_loader.
 
     Parameters
     ----------
@@ -89,7 +88,7 @@ def start_batch(
         Open SQL Server connection to NaviControl.
     description : str
         Human-readable description of this batch run
-        (e.g. 'lupo_loader: advantage ftp sync').
+        (e.g. 'rey_loader: advantage ftp sync').
 
     Returns
     -------
@@ -101,7 +100,7 @@ def start_batch(
     DatabaseError
         If the procedure call fails or returns no result.
     """
-    log_enter(ctx, f"start_batch: {description}", log)
+    log_enter(ctx, f"start_batch: {description}", _logger)
     try:
         cursor = sqlserver_utils.call_proc(
             conn,
@@ -120,17 +119,15 @@ def start_batch(
         finally:
             cursor.close()
 
-
         conn.commit()
         object.__setattr__(ctx, "batch_id", batch_id)
-        log.info("Batch started: BatchID=%d  description=%s", batch_id, description)
-
+        _logger.info("Batch started: BatchID=%d  description=%s", batch_id, description)
 
     except DatabaseError:
         conn.rollback()
         raise
     finally:
-        log_exit(ctx, "start_batch done", log)
+        log_exit(ctx, "start_batch done", _logger)
 
 
 def end_batch(
@@ -158,7 +155,7 @@ def end_batch(
     DatabaseError
         If the procedure call fails.
     """
-    log_enter(ctx, f"end_batch: BatchID={batch_id}", log)
+    log_enter(ctx, f"end_batch: BatchID={batch_id}", _logger)
     try:
         cursor = sqlserver_utils.call_proc(
             conn,
@@ -167,13 +164,13 @@ def end_batch(
         )
         cursor.close()
         conn.commit()
-        log.info("Batch ended: BatchID=%d", batch_id)
+        _logger.info("Batch ended: BatchID=%d", batch_id)
 
     except DatabaseError:
         conn.rollback()
         raise
     finally:
-        log_exit(ctx, "end_batch done", log)
+        log_exit(ctx, "end_batch done", _logger)
 
 
 def start_step(
@@ -225,7 +222,7 @@ def start_step(
     DatabaseError
         If the procedure call fails or returns no result.
     """
-    log_enter(ctx, f"start_step: {source} — {message}", log)
+    log_enter(ctx, f"start_step: {source} — {message}", _logger)
     try:
         cursor = sqlserver_utils.call_proc(
             conn,
@@ -237,7 +234,7 @@ def start_step(
             while row is None:
                 try:
                     row = cursor.fetchone()
-                except Exception:
+                except Exception:  # noqa: BLE001
                     if not cursor.nextset():
                         break
             if row is None:
@@ -249,9 +246,8 @@ def start_step(
         finally:
             cursor.close()
 
-
         conn.commit()
-        log.debug(
+        _logger.debug(
             "BatchStep started: BatchStepID=%d  BatchID=%d  severity=%d  source=%s",
             step_id, batch_id, severity, source,
         )
@@ -261,7 +257,7 @@ def start_step(
         conn.rollback()
         raise
     finally:
-        log_exit(ctx, "start_step done", log)
+        log_exit(ctx, "start_step done", _logger)
 
 
 def end_step(
@@ -289,7 +285,7 @@ def end_step(
     DatabaseError
         If the procedure call fails.
     """
-    log_enter(ctx, f"end_step: BatchStepID={step_id}", log)
+    log_enter(ctx, f"end_step: BatchStepID={step_id}", _logger)
     try:
         cursor = sqlserver_utils.call_proc(
             conn,
@@ -298,13 +294,13 @@ def end_step(
         )
         cursor.close()
         conn.commit()
-        log.debug("BatchStep ended: BatchStepID=%d", step_id)
+        _logger.debug("BatchStep ended: BatchStepID=%d", step_id)
 
     except DatabaseError:
         conn.rollback()
         raise
     finally:
-        log_exit(ctx, "end_step done", log)
+        log_exit(ctx, "end_step done", _logger)
 
 
 def log_reload(
@@ -335,7 +331,7 @@ def log_reload(
     new_batch_id : Optional[int]
         BatchID of the current reload run.
     """
-    log_enter(ctx, f"log_reload: {file_path.name}", log)
+    log_enter(ctx, f"log_reload: {file_path.name}", _logger)
 
     try:
         # Step on original batch — note it is being superseded.
@@ -353,7 +349,7 @@ def log_reload(
                 record_count=0,
             )
             end_batch(ctx, batch_conn, original_batch_id)
-            log.warning(
+            _logger.warning(
                 "Original batch closed: BatchID=%d superseded by BatchID=%s",
                 original_batch_id, new_batch_id,
             )
@@ -375,4 +371,4 @@ def log_reload(
             )
 
     finally:
-        log_exit(ctx, "log_reload done", log)
+        log_exit(ctx, "log_reload done", _logger)

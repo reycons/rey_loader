@@ -1,7 +1,7 @@
 # =============================================================================
 # App Configuration: External Stage Runners
 #
-# Defines paths and arguments for standalone stages that lupo_loader
+# Defines paths and arguments for standalone stages that rey_loader
 # orchestrates via subprocess. Each stage is fully independent —
 # lupo_loader only controls when it runs and what args it receives.
 # =============================================================================

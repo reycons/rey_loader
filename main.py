@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import functools
-import logging
 import subprocess
 import sys
 from pathlib import Path
@@ -26,9 +25,9 @@ from typing import Any
 from rey_lib.config.config_utils import build_ctx
 from rey_lib.config.ctx import find_by_name
 from rey_lib.db import sqlserver_utils
-from rey_lib.errors.error_utils import AppError
+from rey_lib.errors.error_utils import AppError, handle_exception
 from rey_lib.files.file_loader import load_files, transform_files
-from rey_lib.logs.log_utils import setup_logging
+from rey_lib.logs.log_utils import get_logger, setup_logging
 
 from rey_loader import db as app_db
 
@@ -49,7 +48,7 @@ def main() -> None:
     ctx = build_ctx(env=args.env, project_root=_PROJECT_ROOT)
 
     setup_logging(ctx, operation=args.stage)
-    log = logging.getLogger(__name__)
+    log = get_logger(__name__)
     log.info("rey_loader starting — env=%s stage=%s", args.env, args.stage)
 
     try:
@@ -66,11 +65,11 @@ def main() -> None:
         sys.exit(0)
 
     except AppError as exc:
-        log.error("Fatal error: %s", exc, exc_info=True)
+        handle_exception(exc)
         sys.exit(1)
 
-    except Exception as exc:
-        log.error("Unexpected error: %s", exc, exc_info=True)
+    except Exception as exc:  # noqa: BLE001  — top-level safety net only
+        handle_exception(exc)
         sys.exit(2)
 
 
@@ -86,7 +85,7 @@ def _run_sync(ctx: Any) -> None:
     via subprocess and checks the exit code. All ftp_sync config and
     state live in the ftp_sync project directory.
     """
-    log = logging.getLogger(__name__)
+    log = get_logger(__name__)
     stage_cfg = ctx.stages.ftp_sync
 
     cmd = [
@@ -118,10 +117,10 @@ def _run_transform(ctx: Any) -> None:
     Each file transform is self-contained — a failure on one file does
     not prevent processing of others.
     """
-    log       = logging.getLogger(__name__)
+    log       = get_logger(__name__)
     batch_cfg = find_by_name(ctx.db.connections, ctx.db.batch_connection)
 
-    sql_dir = Path("sql/sqlserver")
+    sql_dir = _PROJECT_ROOT / "sql" / "sqlserver"
     if sql_dir.exists():
         sqlserver_utils.init_db(sql_dir)
 
@@ -141,7 +140,7 @@ def _run_transform(ctx: Any) -> None:
             app_db.end_batch(ctx, batch_conn, ctx.batch_id)
             log.info("Transform stage complete — BatchID=%d", ctx.batch_id)
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  — re-raised after batch logging
             app_db.start_step(
                 ctx, batch_conn, ctx.batch_id,
                 severity=app_db.SEVERITY_ERROR,
@@ -150,10 +149,7 @@ def _run_transform(ctx: Any) -> None:
                 parent_step_id=step_id,
             )
             app_db.end_batch(ctx, batch_conn, ctx.batch_id)
-            raise
-
-
-def _transform_all_sources(ctx: Any, batch_conn: Any) -> None:
+            raise(ctx: Any, batch_conn: Any) -> None:
     """
     Iterate all configured data sources and transform each one.
 
@@ -164,7 +160,7 @@ def _transform_all_sources(ctx: Any, batch_conn: Any) -> None:
     batch_conn : pyodbc.Connection
         Open connection to NaviControl for batch logging.
     """
-    log = logging.getLogger(__name__)
+    log = get_logger(__name__)
 
     for data_source in ctx.data_sources:
         for transform_cfg in data_source.transforms:
@@ -213,10 +209,10 @@ def _run_load(ctx: Any) -> None:
     Each file load is self-contained — a failure on one file does not
     prevent processing of others.
     """
-    log       = logging.getLogger(__name__)
+    log       = get_logger(__name__)
     batch_cfg = find_by_name(ctx.db.connections, ctx.db.batch_connection)
 
-    sql_dir = Path("sql/sqlserver")
+    sql_dir = _PROJECT_ROOT / "sql" / "sqlserver"
     if sql_dir.exists():
         sqlserver_utils.init_db(sql_dir)
 
@@ -236,7 +232,7 @@ def _run_load(ctx: Any) -> None:
             app_db.end_batch(ctx, batch_conn, ctx.batch_id)
             log.info("Load stage complete — BatchID=%d", ctx.batch_id)
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  — re-raised after batch logging
             app_db.start_step(
                 ctx, batch_conn, ctx.batch_id,
                 severity=app_db.SEVERITY_ERROR,
@@ -259,7 +255,7 @@ def _load_all_sources(ctx: Any, batch_conn: Any) -> None:
     batch_conn : pyodbc.Connection
         Open connection to NaviControl for batch logging.
     """
-    log = logging.getLogger(__name__)
+    log = get_logger(__name__)
 
     for data_source in ctx.data_sources:
         for load_cfg in data_source.loads:
