@@ -346,10 +346,10 @@ class TestRunTransformWithHooks:
 
         # Mock the connection factory and proc call so no real DB is touched.
         with patch(
-            "rey_lib.files.file_loader.sqlserver_utils.get_connection",
+            "rey_lib.db.sqlserver_utils.get_connection",
             return_value=MagicMock(),
         ), patch(
-            "rey_lib.files.file_loader.sqlserver_utils.call_proc_with_output",
+            "rey_lib.db.sqlserver_utils.call_proc_with_output",
             return_value={"BatchID": 99},
         ):
             run_transform(ctx)
@@ -373,10 +373,10 @@ class TestRunTransformWithHooks:
         write_advantage_csv(data_source.paths.inbox_path, "tran_20260501.csv")
 
         with patch(
-            "rey_lib.files.file_loader.sqlserver_utils.get_connection",
+            "rey_lib.db.sqlserver_utils.get_connection",
             return_value=MagicMock(),
         ), patch(
-            "rey_lib.files.file_loader.sqlserver_utils.call_proc_with_output",
+            "rey_lib.db.sqlserver_utils.call_proc_with_output",
             return_value={"BatchID": 42},
         ):
             run_transform(ctx)
@@ -404,10 +404,10 @@ class TestRunTransformWithHooks:
         write_advantage_csv(data_source.paths.inbox_path, "tran_20260501.csv")
 
         with patch(
-            "rey_lib.files.file_loader.sqlserver_utils.get_connection",
+            "rey_lib.db.sqlserver_utils.get_connection",
             return_value=MagicMock(),
         ), patch(
-            "rey_lib.files.file_loader.sqlserver_utils.call_proc_with_output",
+            "rey_lib.db.sqlserver_utils.call_proc_with_output",
             return_value={"BatchID": 7},
         ):
             run_transform(ctx)
