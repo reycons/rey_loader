@@ -9,8 +9,9 @@ Tests are organised by concern:
   TestTransformFilesConstants   — injected constants appear in output rows
   TestRunTransformOrchestration — run_transform delegates correctly to
                                   transform_files for each data source
-  TestRunTransformWithHooks     — pre_transform hook sets _injected_row_columns;
-                                  values appear in every output row
+  TestRunTransformWithHooks     — pre_transform hook binding sets
+                                  _injected_row_columns; values appear in
+                                  every output row
 """
 
 from __future__ import annotations
@@ -271,18 +272,24 @@ class TestRunTransformOrchestration:
 
 class TestRunTransformWithHooks:
     """
-    pre_transform hooks set _injected_row_columns on ctx; those values appear
-    in every output row.  The SQL Server call is mocked — no real connection needed.
+    pre_transform hook bindings set _injected_row_columns on ctx; those
+    values appear in every output row. The SQL Server call is mocked — no
+    real connection needed.
+
+    Hook shape (current):
+      data_source.transform_hooks: list of bindings, each with
+        name, sql_config (-> ctx.sql_configs entry), and hook (phase label).
     """
 
     def _make_ctx_with_begin_batch_hook(
         self, ctx: Namespace, tmp_path: Path
     ) -> Namespace:
         """
-        Return a ctx copy wired with a begin_batch sql_config and a data source
-        that declares the hook.  The procedure call will be mocked by the caller.
+        Return ctx wired with a begin_batch sql_config plus a transform_hooks
+        binding that fires it at hooks.pre_transform. The proc call is mocked
+        by the test caller.
         """
-        # sql_config for begin_batch — mirrors sql_configs.yaml.
+        # sql_config for begin_batch — mirrors config/app/sql_configs.yaml.
         sql_config = Namespace(
             name="begin_batch",
             type="procedure",
@@ -290,7 +297,7 @@ class TestRunTransformWithHooks:
             proc="NaviControl.dbo.pIns_Batch",
             params=[
                 Namespace(name="BatchStartDT", source="ctx.batch_start_dt"),
-                Namespace(name="BatchDescription", source="data_source.name"),
+                Namespace(name="BatchDescription", source="ctx.cli_call"),
                 Namespace(name="LogFile", source="ctx.log_file"),
             ],
             output_params=[
@@ -303,7 +310,7 @@ class TestRunTransformWithHooks:
             ],
         )
 
-        # Connection Namespace matching what _execute_hooks looks up by name.
+        # Connection Namespace — looked up by name from ctx.db.connections.
         db_conn_cfg = Namespace(
             name="SQLServer_NaviControl_local",
             driver="ODBC Driver 18 for SQL Server",
@@ -312,12 +319,15 @@ class TestRunTransformWithHooks:
             trusted_connection="yes",
         )
 
-        # Data source with hooks declared.
+        # Bind begin_batch to the pre_transform phase on this data source.
         data_source = ctx.data_sources[0]
-        data_source.hooks = Namespace(
-            pre_transform=["begin_batch"],
-            post_transform=None,
-        )
+        data_source.transform_hooks = [
+            Namespace(
+                name="begin_batch",
+                sql_config="begin_batch",
+                hook="hooks.pre_transform",
+            ),
+        ]
 
         ctx.sql_configs = [sql_config]
         ctx.db = Namespace(connections=[db_conn_cfg])
@@ -334,12 +344,12 @@ class TestRunTransformWithHooks:
         data_source = ctx.data_sources[0]
         write_advantage_csv(data_source.paths.inbox_path, "tran_20260501.csv")
 
-        # Mock call_proc_with_output to return BatchID=99 without a real connection.
+        # Mock the connection factory and proc call so no real DB is touched.
         with patch(
-            "rey_lib.files.file_loader.sqlserver_utils.open_connection",
+            "rey_lib.files.file_loader.sqlserver_utils.get_connection",
             return_value=MagicMock(),
         ), patch(
-            "rey_lib.files.file_loader.call_proc_with_output",
+            "rey_lib.files.file_loader.sqlserver_utils.call_proc_with_output",
             return_value={"BatchID": 99},
         ):
             run_transform(ctx)
@@ -356,19 +366,57 @@ class TestRunTransformWithHooks:
     ) -> None:
         """
         After run_transform, ctx.batch_id is set to the value returned by
-        the begin_batch procedure.
+        the begin_batch procedure's output param.
         """
         ctx = self._make_ctx_with_begin_batch_hook(ctx, tmp_path)
         data_source = ctx.data_sources[0]
         write_advantage_csv(data_source.paths.inbox_path, "tran_20260501.csv")
 
         with patch(
-            "rey_lib.files.file_loader.sqlserver_utils.open_connection",
+            "rey_lib.files.file_loader.sqlserver_utils.get_connection",
             return_value=MagicMock(),
         ), patch(
-            "rey_lib.files.file_loader.call_proc_with_output",
+            "rey_lib.files.file_loader.sqlserver_utils.call_proc_with_output",
             return_value={"BatchID": 42},
         ):
             run_transform(ctx)
 
         assert ctx.batch_id == 42, f"Expected ctx.batch_id=42, got {ctx.batch_id!r}"
+
+    def test_bindings_for_other_phases_are_ignored(
+        self, ctx: Namespace, tmp_path: Path
+    ) -> None:
+        """
+        A binding declared for hooks.post_transform must not fire at
+        pre_transform, even if it references a valid sql_config. The
+        dispatcher filters strictly by the binding's `hook` field.
+        """
+        ctx = self._make_ctx_with_begin_batch_hook(ctx, tmp_path)
+        data_source = ctx.data_sources[0]
+        # Re-bind: same sql_config, but now declared for post_transform.
+        data_source.transform_hooks = [
+            Namespace(
+                name="begin_batch",
+                sql_config="begin_batch",
+                hook="hooks.post_transform",
+            ),
+        ]
+        write_advantage_csv(data_source.paths.inbox_path, "tran_20260501.csv")
+
+        with patch(
+            "rey_lib.files.file_loader.sqlserver_utils.get_connection",
+            return_value=MagicMock(),
+        ), patch(
+            "rey_lib.files.file_loader.sqlserver_utils.call_proc_with_output",
+            return_value={"BatchID": 7},
+        ):
+            run_transform(ctx)
+
+        # Hook fired at post_transform — ctx.batch_id is set, but rows were
+        # already written before that, so BatchID column should NOT appear.
+        assert ctx.batch_id == 7
+        rows = _read_output_rows(data_source.paths.converted_path, "tran_20260501_v01.csv")
+        assert rows, "No output rows"
+        assert not rows[0].get("BatchID"), (
+            f"BatchID should not be present when binding is post_transform; got {rows[0].get('BatchID')!r}"
+        )

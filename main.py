@@ -25,11 +25,15 @@ load_dotenv()
 
 from rey_lib.config.config_utils import build_ctx
 from rey_lib.errors.error_utils import AppError, handle_exception
+from rey_lib.files.file_loader import run_app_hooks
 from rey_lib.logs.log_utils import get_logger, setup_logging
 
 from rey_loader.load import run_load
 from rey_loader.sync import run_sync
 from rey_loader.transform import run_transform
+
+
+_SQL_DIR = Path(__file__).parent / "sql"
 
 
 
@@ -51,15 +55,26 @@ def main() -> None:
     ctx = build_ctx(env=args.env, project_root=_PROJECT_ROOT)
 
     # Stamp batch start time on ctx before any stage runs.
-    # pre_transform hooks (e.g. begin_batch) read ctx.batch_start_dt.
+    # pre_run hooks (e.g. begin_batch) read ctx.batch_start_dt.
     object.__setattr__(ctx, "batch_start_dt", datetime.now())
+
+    # Stamp the OS invocation string so sql_config params can reference it
+    # via `source: ctx.cli_call` (e.g. BatchDescription on begin_batch).
+    object.__setattr__(ctx, "cli_call", " ".join(sys.argv))
 
     # setup_logging is called once here — stage modules must not call it again.
     setup_logging(ctx, operation=args.stage)
     log = get_logger(__name__)
     log.info("rey_loader starting — env=%s stage=%s", args.env, args.stage)
 
+    sql_dir = _SQL_DIR if _SQL_DIR.exists() else None
+
     try:
+        # Run-level pre hook: fires once per CLI invocation, before any stage.
+        # Reads ctx.app_hooks (from config.{env}.yaml) and dispatches bindings
+        # whose `hook` field is "hooks.pre_run" — e.g. begin_batch.
+        run_app_hooks(ctx, "hooks.pre_run", sql_dir=sql_dir)
+
         if args.stage in ("sync", "all"):
             run_sync(ctx)
 
@@ -68,6 +83,10 @@ def main() -> None:
 
         if args.stage in ("load", "all"):
             run_load(ctx)
+
+        # Run-level post hook: fires once after all stages complete cleanly.
+        # Bindings with `hook: hooks.post_run` — e.g. end_batch.
+        run_app_hooks(ctx, "hooks.post_run", sql_dir=sql_dir)
 
         log.info("rey_loader complete.")
         sys.exit(0)

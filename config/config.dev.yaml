@@ -22,3 +22,20 @@ log_path: ~/python/logs/rey_loader/rey_loader.{operation}.{timestamp}.log
 # -----------------------------------------------------------------------------
 
 chunk_size: 500
+
+# -----------------------------------------------------------------------------
+# App-level (run) hooks
+#
+# Bindings that fire once per CLI invocation — pre_run before any data source
+# is processed, post_run after all data sources are processed. Each entry
+# references a named sql_config from config/app/sql_configs.yaml.
+# -----------------------------------------------------------------------------
+
+app_hooks:
+  - name:       begin_batch
+    sql_config: begin_batch
+    hook:       hooks.pre_run
+
+  - name:       end_batch
+    sql_config: end_batch
+    hook:       hooks.post_run

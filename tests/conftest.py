@@ -15,9 +15,19 @@ from rey_lib.config.config_utils import Namespace
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _ns(data: dict) -> Namespace:
-    """Wrap a dict as a rey_lib Namespace (supports .items())."""
-    return Namespace(data)
+def _ns(data: dict | None = None, **kwargs) -> Namespace:
+    """
+    Wrap a dict (or keyword arguments) as a rey_lib Namespace.
+
+    Accepts either form:
+        _ns({"name": "advantage", "version": "v01"})
+        _ns(name="advantage", version="v01")
+
+    The dict form is used when keys contain non-identifier characters
+    (e.g. CSV column names with spaces). The kwargs form is cleaner for
+    plain identifier keys.
+    """
+    return Namespace(data if data is not None else kwargs)
 
 
 def _make_paths(tmp_path: Path) -> Namespace:
@@ -46,7 +56,9 @@ def ctx(tmp_path: Path) -> Namespace:
     """
     Minimal application context for transform-stage tests.
 
-    sql_configs is empty — no hooks, so no SQL Server connection is needed.
+    sql_configs and app_hooks are empty — no hook bindings fire, so no SQL
+    Server connection is needed by default. Tests that exercise hooks add
+    bindings explicitly (see TestRunTransformWithHooks in test_transform.py).
     batch_id is pre-set to a known value so _build_constants can resolve it.
     """
     # Suppress noisy logging during tests — only WARNING and above shows.
@@ -60,9 +72,11 @@ def ctx(tmp_path: Path) -> Namespace:
         "env":              "dev",
         "log_depth":        0,
         "log_file":         str(tmp_path / "test.log"),
+        "cli_call":         "pytest",                 # stand-in for sys.argv
         "batch_id":         None,
         "batch_start_dt":   datetime(2026, 5, 8, 9, 0, 0),
         "sql_configs":      [],
+        "app_hooks":        [],                       # run-level bindings; populated by tests as needed
         "data_sources":     [data_source],
     })
 
@@ -85,7 +99,7 @@ def _make_advantage_data_source(paths: Namespace) -> Namespace:
         max_files_per_run=10,
         paths=paths,
         transforms=transform_cfg,
-        hooks=None,          # no hooks — avoids SQL Server in unit tests
+        transform_hooks=[],  # transform-level hook bindings; tests add as needed
         loads=[],            # load stage tested separately
     )
 
