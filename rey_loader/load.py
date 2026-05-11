@@ -12,8 +12,8 @@ import logging
 from pathlib import Path
 
 from rey_lib.config.config_utils import Namespace
-from rey_lib.rey_lib.db.db_adapter import DBAdapter
-from rey_lib.rey_lib.files.loader import load_files
+from rey_lib.db.db_adapter import DBAdapter
+from rey_lib.files.loader import load_files
 
 __all__ = ["run_load"]
 
