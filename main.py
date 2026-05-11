@@ -20,6 +20,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from rey_lib.config.config_utils import build_ctx
 from rey_lib.errors.error_utils import AppError, handle_exception
 from rey_lib.logs.log_utils import get_logger, setup_logging
@@ -27,6 +30,9 @@ from rey_lib.logs.log_utils import get_logger, setup_logging
 from rey_loader.load import run_load
 from rey_loader.sync import run_sync
 from rey_loader.transform import run_transform
+
+
+
 
 __all__: list[str] = []
 

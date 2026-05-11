@@ -1,3 +1,7 @@
+# Ignore all data_feeds configs
+config/data_feeds/
+# Ignore local data feed config files
+config/data_feeds/data_source.advantage.trade.yaml
 .venv/
 .env
 __pycache__/
@@ -8,3 +12,6 @@ dist/
 build/
 .DS_Store
 *.log
+# Never track config folders or files
+config/
+config/**
