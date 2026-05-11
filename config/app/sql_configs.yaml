@@ -96,22 +96,22 @@ sql_configs:
     proc:       NaviControl.dbo.pIns_BatchStep
     params:
       - name:   BatchID
-        source: ctx.batch_id           # parent batch — set by begin_batch
+        source: ctx.batch_id              # parent batch — set by begin_batch
       - name:   severity
-        source: "0"                    # 0 = info; literal value
+        source: "0"                       # 0 = info; literal value
       - name:   source
-        source: data_source.name       # the data source emitting this step
+        source: ctx.current_file_name     # filename being processed
       - name:   message
-        source: "begin step"           # literal — adjust per binding if needed
+        source: "begin transform"         # literal — adjust per binding if needed
       - name:   RecordCount
-        source: "0"                    # row count is 0 at step start
+        source: "0"                       # row count is 0 at step start
       # ParentBatchStepID is omitted intentionally — the proc defaults it to
       # NULL. Top-level steps (transform/load) do not nest under another step;
       # add a `ParentBatchStepID` param here only when you need nested logging.
     output_params:
       - name:       BatchStepID
         sql_type:   BIGINT
-        ctx_var:    batch_step_id      # written to ctx.batch_step_id
+        ctx_var:    batch_step_id         # written to ctx.batch_step_id
 
   # ---------------------------------------------------------------------------
   # end_batch_step
