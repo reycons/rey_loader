@@ -100,9 +100,11 @@ sql_configs:
       - name:   severity
         source: "0"                       # 0 = info; literal value
       - name:   source
-        source: ctx.current_file_name     # filename being processed
+        source: ctx.cli_call              # what called the proc — the CLI
+                                          # invocation (set in main.py from
+                                          # sys.argv)
       - name:   message
-        source: "begin transform"         # literal — adjust per binding if needed
+        source: ctx.current_file_name     # filename being processed
       - name:   RecordCount
         source: "0"                       # row count is 0 at step start
       # ParentBatchStepID is omitted intentionally — the proc defaults it to
