@@ -8,6 +8,7 @@ ctx.stages.ftp_sync. No paths or arguments are hardcoded here.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 
 from pathlib import Path
@@ -54,13 +55,16 @@ def run_sync(ctx: Namespace) -> None:
     _logger.info("Running ftp_sync: %s", " ".join(cmd))
     script_path = Path(str(ftp_cfg.script))
 
+    env = os.environ.copy()
+    env.pop("APP_CONFIG_DIR", None)
+
     result = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         cwd=script_path.parent,
+        env=env,
     )
-
 
 
     if result.returncode != 0:
