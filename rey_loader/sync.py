@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import subprocess
 
+from pathlib import Path
 from rey_lib.config.config_utils import Namespace
 from rey_lib.errors.error_utils import AppError
 
@@ -51,7 +52,16 @@ def run_sync(ctx: Namespace) -> None:
     ]
 
     _logger.info("Running ftp_sync: %s", " ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    script_path = Path(str(ftp_cfg.script))
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        cwd=script_path.parent,
+    )
+
+
 
     if result.returncode != 0:
         _logger.error("ftp_sync stderr:\n%s", result.stderr)
