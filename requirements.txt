@@ -1,4 +1,4 @@
-git+ssh://git@github.com/reycons/rey_lib.git@c477944d5a073478751085b6cd7b90a1cf10a968#egg=rey_lib
+git+ssh://git@github.com/reycons/rey_lib.git@e0758e75c59122617ace06f09b62e025c9071312#egg=rey_lib
 pyodbc==5.3.0
 PyYAML==6.0.3
 python-dotenv==1.2.2
