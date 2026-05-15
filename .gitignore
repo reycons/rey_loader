@@ -12,6 +12,7 @@ dist/
 build/
 .DS_Store
 *.log
+.claude/worktrees/
 # Never track config folders or files
 config/
 config/**
