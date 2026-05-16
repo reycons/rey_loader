@@ -7,14 +7,13 @@ or format specific code lives here.
 
 from __future__ import annotations
 
-import logging
-
 from rey_lib.config.config_utils import Namespace
 from rey_lib.files.file_loader import run_transform as _run_transform
+from rey_lib.logs.log_utils import get_logger
 
 __all__ = ["run_transform"]
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 
 def run_transform(ctx: Namespace) -> None:

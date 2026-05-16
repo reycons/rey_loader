@@ -7,17 +7,17 @@ ctx.stages.ftp_sync. No paths or arguments are hardcoded here.
 
 from __future__ import annotations
 
-import logging
 import os
 import subprocess
 
 from pathlib import Path
 from rey_lib.config.config_utils import Namespace
 from rey_lib.errors.error_utils import AppError
+from rey_lib.logs.log_utils import get_logger
 
 __all__ = ["run_sync"]
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 
 def run_sync(ctx: Namespace) -> None:

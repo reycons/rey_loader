@@ -10,15 +10,15 @@ source YAML.
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 from rey_lib.config.config_utils import Namespace
 from rey_lib.files.file_loader import run_load as _run_load
+from rey_lib.logs.log_utils import get_logger
 
 __all__ = ["run_load"]
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 # SQL files for post_load_sql are resolved relative to the project sql/ directory.
 _SQL_DIR = Path(__file__).parent.parent / "sql"
