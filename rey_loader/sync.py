@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 from rey_lib.config.config_utils import Namespace
 from rey_lib.errors.error_utils import AppError
-from rey_lib.logs.log_utils import get_logger
+from rey_lib.logs import get_logger
 
 __all__ = ["run_sync"]
 
