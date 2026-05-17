@@ -49,6 +49,7 @@ _VALID_STAGES = frozenset({"sync", "transform", "load", "all"})
 def main() -> None:
     """Parse CLI arguments, build ctx, and dispatch to the requested stage."""
     args = _parse_args()
+    _apply_env_overrides(args.env_overrides)
 
     ctx = build_ctx(env=args.env, project_root=_PROJECT_ROOT)
 
@@ -117,7 +118,24 @@ def _parse_args() -> argparse.Namespace:
         choices=sorted(_VALID_STAGES),
         help="Stage to run: sync, transform, load, or all.",
     )
+    parser.add_argument(
+        "--set",
+        action="append",
+        metavar="KEY=VALUE",
+        dest="env_overrides",
+        default=[],
+        help="Override a .env variable for this run (repeatable): --set KEY=VALUE",
+    )
     return parser.parse_args()
+
+
+def _apply_env_overrides(overrides: list[str]) -> None:
+    """Write --set KEY=VALUE pairs into os.environ before build_ctx reads them."""
+    for item in overrides:
+        if "=" not in item:
+            raise SystemExit(f"--set requires KEY=VALUE format, got: {item!r}")
+        key, _, value = item.partition("=")
+        os.environ[key.strip()] = value
 
 
 if __name__ == "__main__":
