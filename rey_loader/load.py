@@ -10,8 +10,6 @@ source YAML.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from rey_lib.config.config_utils import Namespace
 from rey_lib.files.file_loader import run_load as _run_load
 from rey_lib.logs import get_logger
@@ -19,10 +17,6 @@ from rey_lib.logs import get_logger
 __all__ = ["run_load"]
 
 _logger = get_logger(__name__)
-
-# SQL files for post_load_sql are resolved relative to the project sql/ directory.
-_SQL_DIR = Path(__file__).parent.parent / "sql"
-
 
 def run_load(ctx: Namespace) -> None:
     """Run the load stage for all configured data sources.
@@ -37,6 +31,5 @@ def run_load(ctx: Namespace) -> None:
     ctx : Namespace
         Application context built by build_ctx().
     """
-    sql_dir = _SQL_DIR if _SQL_DIR.exists() else None
-    total = _run_load(ctx, sql_dir=sql_dir)
+    total = _run_load(ctx, sql_dir=ctx.sql_dir)
     _logger.info("Load stage complete: %d row(s) loaded.", total)

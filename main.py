@@ -29,16 +29,11 @@ load_dotenv(Path(_config_dir_env).expanduser() / ".env" if _config_dir_env else 
 from rey_lib.config.config_utils import build_ctx
 from rey_lib.errors.error_utils import AppError, handle_exception
 from rey_lib.files.file_loader import run_app_hooks
-from rey_lib.logs.log_utils import get_logger, setup_logging
+from rey_lib.logs import get_logger, setup_logging
 
 from rey_loader.load import run_load
 from rey_loader.sync import run_sync
 from rey_loader.transform import run_transform
-
-
-_SQL_DIR = Path(__file__).parent / "sql"
-
-
 
 
 __all__: list[str] = []
@@ -70,13 +65,11 @@ def main() -> None:
     log = get_logger(__name__)
     log.info("rey_loader starting — env=%s stage=%s", args.env, args.stage)
 
-    sql_dir = _SQL_DIR if _SQL_DIR.exists() else None
-
     try:
         # Run-level pre hook: fires once per CLI invocation, before any stage.
         # Reads ctx.app_hooks (from config.{env}.yaml) and dispatches bindings
         # whose `hook` field is "hooks.pre_run" — e.g. begin_batch.
-        run_app_hooks(ctx, "hooks.pre_run", sql_dir=sql_dir)
+        run_app_hooks(ctx, "hooks.pre_run", sql_dir=ctx.sql_dir)
 
         if args.stage in ("sync", "all"):
             run_sync(ctx)
@@ -89,7 +82,7 @@ def main() -> None:
 
         # Run-level post hook: fires once after all stages complete cleanly.
         # Bindings with `hook: hooks.post_run` — e.g. end_batch.
-        run_app_hooks(ctx, "hooks.post_run", sql_dir=sql_dir)
+        run_app_hooks(ctx, "hooks.post_run", sql_dir=ctx.sql_dir)
 
         log.info("rey_loader complete.")
         sys.exit(0)
