@@ -22,23 +22,13 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from dotenv import load_dotenv
+# Pre-parse --config-path / --config-dir and call load_dotenv before other imports.
+from rey_lib.config.cli import preparse_config_args
+preparse_config_args()
 
-# Pre-parse --config-dir before load_dotenv so the caller can point to a
-# different config directory without setting APP_CONFIG_DIR in the environment.
-_pre = argparse.ArgumentParser(add_help=False)
-_pre.add_argument("--config-path", dest="config_path", default=None)
-_pre.add_argument("--config-dir",  dest="config_dir",  default=None)
-_pre_args, _ = _pre.parse_known_args()
-
-_config_dir_env = (
-    str(Path(_pre_args.config_path).expanduser().parent) if _pre_args.config_path
-    else _pre_args.config_dir
-    or os.environ.get("APP_CONFIG_DIR")
-)
-load_dotenv(Path(_config_dir_env).expanduser() / ".env" if _config_dir_env else None)
-
-from rey_lib.config.config_utils import build_ctx, build_ctx_from_path
+from rey_lib.config.bootstrap import build_ctx_for_app
+from rey_lib.config.cli import add_config_args, apply_env_overrides
+from rey_lib.config.config_utils import build_ctx
 from rey_lib.errors.error_utils import AppError, handle_exception
 from rey_lib.files.file_loader import run_app_hooks
 from rey_lib.logs import get_logger, setup_logging
@@ -61,11 +51,12 @@ _VALID_STAGES = frozenset({"sync", "transform", "load", "all"})
 def main() -> None:
     """Parse CLI arguments, build ctx, and dispatch to the requested stage."""
     args = _parse_args()
-    _apply_env_overrides(args.env_overrides)
+    apply_env_overrides(args.env_overrides)
 
     if args.config_path:
-        ctx = build_ctx_from_path(
-            Path(args.config_path).expanduser().resolve(),
+        ctx = build_ctx_for_app(
+            installation_config_path=Path(args.config_path),
+            app_name="rey_loader",
             project_root=_PROJECT_ROOT,
         )
     else:
@@ -85,7 +76,7 @@ def main() -> None:
     # setup_logging is called once here — stage modules must not call it again.
     setup_logging(ctx, operation=args.stage)
     log = get_logger(__name__)
-    log.info("rey_loader starting — env=%s stage=%s", args.env, args.stage)
+    log.info("rey_loader starting — env=%s stage=%s", ctx.env, args.stage)
 
     try:
         # Run-level pre hook: fires once per CLI invocation, before any stage.
@@ -127,52 +118,14 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="rey_loader — file ingestion orchestrator"
     )
-    parser.add_argument(
-        "--env",
-        required=False,
-        default=None,
-        choices=["dev", "prod"],
-        help="Target environment. Required when --config-path is not provided.",
-    )
-    parser.add_argument(
-        "--config-path",
-        dest="config_path",
-        default=None,
-        help=(
-            "Path to the app config file (e.g. config.dev.yaml). "
-            "Derives env from filename; supersedes --env and --config-dir."
-        ),
-    )
+    add_config_args(parser)
     parser.add_argument(
         "--stage",
         required=True,
         choices=sorted(_VALID_STAGES),
         help="Stage to run: sync, transform, load, or all.",
     )
-    parser.add_argument(
-        "--config-dir",
-        dest="config_dir",
-        default=None,
-        help="Path to the config directory (overrides APP_CONFIG_DIR).",
-    )
-    parser.add_argument(
-        "--set",
-        action="append",
-        metavar="KEY=VALUE",
-        dest="env_overrides",
-        default=[],
-        help="Override a .env variable for this run (repeatable): --set KEY=VALUE",
-    )
     return parser.parse_args()
-
-
-def _apply_env_overrides(overrides: list[str]) -> None:
-    """Write --set KEY=VALUE pairs into os.environ before build_ctx reads them."""
-    for item in overrides:
-        if "=" not in item:
-            raise SystemExit(f"--set requires KEY=VALUE format, got: {item!r}")
-        key, _, value = item.partition("=")
-        os.environ[key.strip()] = value
 
 
 if __name__ == "__main__":
