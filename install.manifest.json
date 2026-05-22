@@ -1,0 +1,10 @@
+{
+  "config_dirs": ["data_sources", "sql_configs", "diagnostics"],
+  "default_files": [
+    {
+      "path": "diagnostics/default.yaml",
+      "content": "diagnostics:\n  info:\n    enabled: true\n    dump_ctx: false\n  warning:\n    enabled: true\n    dump_ctx: true\n  error:\n    enabled: true\n    dump_ctx: true\n    dump_stack_trace: true\n"
+    }
+  ],
+  "pip_editable": false
+}
