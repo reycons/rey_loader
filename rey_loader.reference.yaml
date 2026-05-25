@@ -325,7 +325,10 @@ data_sources:
         # Default: ",".
 
         file_pattern: "*.csv"
-        # Glob pattern for input files.
+        # Glob pattern or list of glob patterns matched against inbox files.
+        # Date/token placeholders such as {yyyymmdd} are treated as * for discovery.
+        # Examples: "*.csv", "tran_{yyyymmdd}.csv", ["*.ps1", "*.tr1"]
+        # Default: "*"
 
         date_format: yyyymmdd
         # Informational helper used in filename/date token conventions.
@@ -433,3 +436,48 @@ data_sources:
             - move:
                 from: converted_path
                 to: rejected_path
+
+
+# =============================================================================
+# CLI — rey_loader command-line interface
+#
+# All parameters are passed as --name value. Boolean flags use --name / omit.
+# =============================================================================
+
+# rey_loader CLI parameters:
+#
+# --stage <value>           Required. Stage to run.
+#                           Choices: all, sync, transform, load
+#                             all       — run sync, then transform, then load
+#                             sync      — run ftp_sync stage only
+#                             transform — transform inbox files to converted output
+#                             load      — load converted files into the database
+#
+# --config-path <path>      Path to the installation config file or config root.
+#                           Supersedes --config-dir and --environment.
+#
+# --config-dir <path>       Directory containing config.<env>.yaml.
+#                           Overrides APP_CONFIG_DIR environment variable.
+#
+# --environment <value>     Runtime environment.
+#                           Choices: development, test, production
+#
+# --installation <value>    Installation name.
+#
+# --set KEY=VALUE           Override a .env variable for this run. Repeatable.
+#                           Example: --set MY_DB_PASSWORD=secret
+#
+# Pipeline coordinator arguments (injected by pipeline_coordinator):
+#
+# --pipeline-name <value>       Pipeline name.
+# --pipeline-run-id <value>     Unique run identifier.
+# --pipeline-step-name <value>  Step name within the pipeline.
+# --pipeline-step-id <value>    Optional step identifier.
+# --log-file <path>             Shared pipeline JSONL log file path.
+#
+# Usage examples:
+#   python main.py --environment development --stage all
+#   python main.py --config-path ~/installations/ccc/config/v01/config.prod.yaml --stage load
+#   python main.py --environment production --stage sync
+#   python main.py --environment production --stage transform
+#   python main.py --environment development --stage all --config-dir ~/apps/rey_loader/config
