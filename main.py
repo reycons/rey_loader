@@ -22,8 +22,7 @@ from pathlib import Path
 from rey_lib.config.cli import preparse_config_args
 preparse_config_args()
 
-from rey_lib.config.cli import add_config_args, apply_env_overrides
-from rey_lib.config.config_utils import build_ctx_from_path
+from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_from_args
 from rey_lib.errors.error_utils import AppError, handle_exception
 from rey_lib.files.file_loader import run_app_hooks
 from rey_lib.logs import get_logger, setup_logging
@@ -51,7 +50,7 @@ def main() -> None:
 
     if not args.config_path:
         raise SystemExit("--config-path is required.")
-    ctx = build_ctx_from_path(Path(args.config_path), app_name=APP_NAME)
+    ctx = build_ctx_from_args(args, app_name=APP_NAME)
 
     # Stamp batch start time on ctx before any stage runs.
     # pre_run hooks (e.g. begin_batch) read ctx.batch_start_dt.
