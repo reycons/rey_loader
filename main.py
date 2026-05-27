@@ -37,6 +37,7 @@ __all__: list[str] = []
 
 _PROJECT_ROOT = Path(__file__).parent
 _VALID_STAGES = frozenset({"sync", "transform", "load", "all"})
+APP_NAME = "rey_loader"
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +51,7 @@ def main() -> None:
 
     if not args.config_path:
         raise SystemExit("--config-path is required.")
-    ctx = build_ctx_from_path(Path(args.config_path))
+    ctx = build_ctx_from_path(Path(args.config_path), app_name=APP_NAME)
 
     # Stamp batch start time on ctx before any stage runs.
     # pre_run hooks (e.g. begin_batch) read ctx.batch_start_dt.
