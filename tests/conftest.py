@@ -69,7 +69,6 @@ def ctx(tmp_path: Path) -> Namespace:
     data_source = _make_advantage_data_source(paths)
 
     return _ns({
-        "env":              "dev",
         "log_depth":        0,
         "log_file":         str(tmp_path / "test.log"),
         "cli_call":         "pytest",                 # stand-in for sys.argv
@@ -93,6 +92,7 @@ def _make_advantage_data_source(paths: Namespace) -> Namespace:
     data_source.advantage.trade.yaml.
     """
     transform_cfg = _make_advantage_transform_cfg(paths)
+    _convert_transform_cfg_to_native_columns(transform_cfg)
 
     return _ns(
         name="advantage",
@@ -102,6 +102,31 @@ def _make_advantage_data_source(paths: Namespace) -> Namespace:
         transform_hooks=[],  # transform-level hook bindings; tests add as needed
         loads=[],            # load stage tested separately
     )
+
+
+def _convert_transform_cfg_to_native_columns(transform_cfg: Namespace) -> None:
+    """Convert the fixture source maps into the native list-based column shape."""
+    source_columns = transform_cfg.columns
+    transforms = transform_cfg.field_transforms
+    constants = transform_cfg.constants
+
+    columns = []
+    for name, source in source_columns.items():
+        col = {"name": name, "source": source}
+        transform = transforms.get(name)
+        if transform:
+            col["transform"] = transform
+        columns.append(_ns(col))
+
+    for name, value in constants.items():
+        columns.append(_ns({
+            "name": name,
+            "transform": _ns(type="constant", value=value),
+        }))
+
+    object.__setattr__(transform_cfg, "columns", columns)
+    delattr(transform_cfg, "field_transforms")
+    delattr(transform_cfg, "constants")
 
 
 def _make_advantage_transform_cfg(paths: Namespace) -> Namespace:

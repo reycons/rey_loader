@@ -7,17 +7,13 @@ pipeline in sequence.
 
 Usage
 -----
-    python main.py --env dev  --stage sync
-    python main.py --env prod --stage transform
-    python main.py --env prod --stage load
-    python main.py --env prod --stage all
-    python main.py --env dev  --stage all --config-dir /path/to/configs/rey_loader
+    python main.py --config-path /path/to/configs/v01/config.yaml --stage sync
+    python main.py --config-path /path/to/configs/v01/config.yaml --stage all
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -26,9 +22,8 @@ from pathlib import Path
 from rey_lib.config.cli import preparse_config_args
 preparse_config_args()
 
-from rey_lib.config.bootstrap import build_ctx_for_app
 from rey_lib.config.cli import add_config_args, apply_env_overrides
-from rey_lib.config.config_utils import build_ctx
+from rey_lib.config.config_utils import build_ctx_from_path
 from rey_lib.errors.error_utils import AppError, handle_exception
 from rey_lib.files.file_loader import run_app_hooks
 from rey_lib.logs import get_logger, setup_logging
@@ -53,17 +48,9 @@ def main() -> None:
     args = _parse_args()
     apply_env_overrides(args.env_overrides)
 
-    if args.config_path:
-        ctx = build_ctx_for_app(
-            installation_config_path=Path(args.config_path),
-            app_name="rey_loader",
-            project_root=_PROJECT_ROOT,
-        )
-    else:
-        if not args.env:
-            raise SystemExit("--env is required when --config-path is not provided.")
-        config_dir = Path(args.config_dir).expanduser().resolve() if args.config_dir else None
-        ctx = build_ctx(env=args.env, project_root=_PROJECT_ROOT, config_dir=config_dir)
+    if not args.config_path:
+        raise SystemExit("--config-path is required.")
+    ctx = build_ctx_from_path(Path(args.config_path))
 
     # Stamp batch start time on ctx before any stage runs.
     # pre_run hooks (e.g. begin_batch) read ctx.batch_start_dt.
@@ -76,7 +63,7 @@ def main() -> None:
     # setup_logging is called once here — stage modules must not call it again.
     setup_logging(ctx, operation=args.stage)
     log = get_logger(__name__)
-    log.info("rey_loader starting — env=%s stage=%s", ctx.env, args.stage)
+    log.info("rey_loader starting — stage=%s", args.stage)
 
     try:
         # Run-level pre hook: fires once per CLI invocation, before any stage.

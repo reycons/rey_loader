@@ -206,7 +206,7 @@ class TestTransformFilesConstants:
 # ---------------------------------------------------------------------------
 
 class TestTransformFilesDateParsing:
-    """Date field_transforms convert raw values correctly."""
+    """Inline date transforms convert raw values correctly."""
 
     def test_trade_date_yyyymmdd_parsed(
         self, ctx: Namespace, tmp_path: Path

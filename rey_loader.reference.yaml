@@ -7,9 +7,6 @@
 
 # Config file names used by this app:
 #   app.yaml
-#   config.dev.yaml
-#   config.test.yaml
-#   config.prod.yaml
 #   app/stages.yaml
 #   app/sql_configs.yaml
 #   app/llm_configs.yaml
@@ -105,8 +102,8 @@ stages:
     # Absolute path to the stage entry point script.
 
     args: []
-    # Extra arguments passed after --env <value> on every invocation.
-    # --env is always injected by rey_loader — do not include it here.
+    # Extra arguments passed before rey_loader appends its runtime env value.
+    # Do not include the runtime environment value here.
     # Example: ["--dry-run", "--verbose"]
 
 
@@ -364,40 +361,69 @@ data_sources:
                 to: rejected_path
         # Movement from/to values reference keys under paths.
 
-        constants:
-          broker: my_broker
-          source_file: "{incoming_file_name}"
-          archive_file: "{archive_path}"
-        # Constant output columns. Values may use runtime path/file tokens.
-
         columns:
-          output_column_a: Source Column A
-          output_column_b: Source Column B
-        # Mapping of output column name to source header column.
+          - name: output_column_a
+            source: Source Column A
 
-        field_transforms:
-          output_column_a:
-            type: text
-          trade_date:
-            type: date
-            format: "%Y%m%d"
-            allow_blank: true
-          amount:
-            type: numeric
-            strip_chars: ",$"
-            allow_blank: true
-          whole_number:
-            type: numeric
-            cast_to: integer
-          code:
-            type: regex_extract
-            pattern: "([A-Z]+)"
-            group: 1
-            cast_to: string
-          sensitive_value:
-            type: encrypt
-            key: env.MY_ENCRYPTION_KEY
+          - name: output_column_b
+            source: Source Column B
+
+          - name: trade_date
+            source: Trade Date
+            transform:
+              type: date
+              format: "%Y%m%d"
+              allow_blank: true
+
+          - name: amount
+            source: Amount
+            transform:
+              type: numeric
+              strip_chars: ",$"
+              allow_blank: true
+
+          - name: whole_number
+            source: Whole Number
+            transform:
+              type: numeric
+              cast_to: integer
+
+          - name: code
+            source: Description
+            transform:
+              type: regex_extract
+              pattern: "([A-Z]+)"
+              group: 1
+              cast_to: string
+
+          - name: sensitive_value
+            source: Sensitive Value
+            transform:
+              type: encrypt
+              key: env.MY_ENCRYPTION_KEY
+
+          - name: broker
+            transform:
+              type: constant
+              value: my_broker
+
+          - name: source_file
+            transform:
+              type: constant
+              value: "{incoming_file_name}"
+        # Native transform column shape. Each output column is defined once:
+        #   name      — output column name written to converted CSV/load table
+        #   source    — source header name, positional index, or fixed-width range
+        #   transform — optional inline transform config
+        # Omit transform for pass-through text/boolean columns.
+        # Use transform.type: constant for values previously modeled as
+        # separate constants.
+        # This list-based shape is the only supported shape for new configs.
+        # Old mapping-style columns, field_transforms, and constants must be
+        # converted before use.
         # Common transform type values:
+        #   constant
+        #   context
         #   text
         #   date
         #   datetime
@@ -407,7 +433,7 @@ data_sources:
         #   regex_extract
         #   encrypt
         # Common options:
-        #   format, allow_blank, strip_chars, pattern, group, cast_to, key
+        #   value, format, allow_blank, strip_chars, pattern, group, cast_to, key
         # cast_to values used for SQL typing: string, int, integer, float, double.
         # file_redactor profile type mapping for LLM-generated loader YAML:
         #   integer -> type: numeric
@@ -444,40 +470,77 @@ data_sources:
 # All parameters are passed as --name value. Boolean flags use --name / omit.
 # =============================================================================
 
-# rey_loader CLI parameters:
-#
-# --stage <value>           Required. Stage to run.
-#                           Choices: all, sync, transform, load
-#                             all       — run sync, then transform, then load
-#                             sync      — run ftp_sync stage only
-#                             transform — transform inbox files to converted output
-#                             load      — load converted files into the database
-#
-# --config-path <path>      Path to the installation config file or config root.
-#                           Supersedes --config-dir and --environment.
-#
-# --config-dir <path>       Directory containing config.<env>.yaml.
-#                           Overrides APP_CONFIG_DIR environment variable.
-#
-# --environment <value>     Runtime environment.
-#                           Choices: development, test, production
-#
-# --installation <value>    Installation name.
-#
-# --set KEY=VALUE           Override a .env variable for this run. Repeatable.
-#                           Example: --set MY_DB_PASSWORD=secret
-#
-# Pipeline coordinator arguments (injected by pipeline_coordinator):
-#
-# --pipeline-name <value>       Pipeline name.
-# --pipeline-run-id <value>     Unique run identifier.
-# --pipeline-step-name <value>  Step name within the pipeline.
-# --pipeline-step-id <value>    Optional step identifier.
-# --log-file <path>             Shared pipeline JSONL log file path.
-#
-# Usage examples:
-#   python main.py --environment development --stage all
-#   python main.py --config-path ~/installations/ccc/config/v01/config.prod.yaml --stage load
-#   python main.py --environment production --stage sync
-#   python main.py --environment production --stage transform
-#   python main.py --environment development --stage all --config-dir ~/apps/rey_loader/config
+cli:
+  invocation: "python main.py [shared_parameters] --stage <stage>"
+  # Structured CLI contract for LLM/pipeline authors.
+  # Pipeline steps for rey_loader do not use a subcommand; args are appended
+  # directly after the shared parameters.
+
+  shared_parameters:
+    - name: config-path
+      required: false
+      value_type: path
+      description: Path to an app config file, installation config file, or config root.
+
+    - name: config-dir
+      required: false
+      value_type: path
+      description: Directory containing config.<env>.yaml.
+
+    - name: environment
+      required: false
+      value_type: choice
+      possible_values: [development, test, production]
+      description: Runtime environment. Required when config-path is omitted.
+
+    - name: installation
+      required: false
+      value_type: string
+      description: Installation name.
+
+    - name: set
+      required: false
+      repeatable: true
+      value_type: KEY=VALUE
+      description: Override an environment variable for this run.
+
+    - name: pipeline-name
+      required: false
+      value_type: string
+      description: Pipeline name supplied by pipeline_coordinator.
+
+    - name: pipeline-run-id
+      required: false
+      value_type: string
+      description: Unique pipeline run identifier supplied by pipeline_coordinator.
+
+    - name: pipeline-step-name
+      required: false
+      value_type: string
+      description: Pipeline step name supplied by pipeline_coordinator.
+
+    - name: pipeline-step-id
+      required: false
+      value_type: string
+      description: Optional unique pipeline step identifier.
+
+    - name: log-file
+      required: false
+      value_type: path
+      description: Shared pipeline JSONL log path.
+
+  parameters:
+    - name: stage
+      required: true
+      value_type: choice
+      possible_values: [all, sync, transform, load]
+      description: Ingestion stage to run.
+      values:
+        all: Run sync, transform, and load in order.
+        sync: Run the configured ftp_sync stage only.
+        transform: Transform inbox files to converted output.
+        load: Load converted files into the database.
+
+  examples:
+    - "python main.py --config-path ~/installations/ccc/configs/v01/config.yaml --stage all"
+    - "python main.py --config-path ~/installations/ccc/configs/v01/config.yaml --stage load"
