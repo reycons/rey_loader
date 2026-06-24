@@ -28,6 +28,7 @@ from rey_lib.files.file_loader import run_app_hooks
 from rey_lib.logs import get_logger, setup_logging
 
 from rey_loader.load import run_load
+from rey_loader.sql_apply import run_sql_apply
 from rey_loader.sync import run_sync
 from rey_loader.transform import run_transform
 
@@ -35,7 +36,7 @@ from rey_loader.transform import run_transform
 __all__: list[str] = []
 
 _PROJECT_ROOT = Path(__file__).parent
-_VALID_STAGES = frozenset({"sync", "transform", "load", "all"})
+_VALID_STAGES = frozenset({"sync", "transform", "load", "sql", "all"})
 APP_NAME = "rey_loader"
 
 
@@ -66,6 +67,15 @@ def main() -> None:
     log.info("rey_loader starting — stage=%s", args.stage)
 
     try:
+        # The 'sql' stage applies generated SQL files against a named
+        # connection. It is self-contained — it does not participate in the
+        # file-ingestion batch (no begin_batch/end_batch hooks, no sync/
+        # transform/load).
+        if args.stage == "sql":
+            run_sql_apply(ctx, args.source)
+            log.info("rey_loader complete.")
+            sys.exit(0)
+
         # Run-level pre hook: fires once per CLI invocation, before any stage.
         # Reads ctx.app_hooks (from config.{env}.yaml) and dispatches bindings
         # whose `hook` field is "hooks.pre_run" — e.g. begin_batch.
@@ -110,7 +120,12 @@ def _parse_args() -> argparse.Namespace:
         "--stage",
         required=True,
         choices=sorted(_VALID_STAGES),
-        help="Stage to run: sync, transform, load, or all.",
+        help="Stage to run: sync, transform, load, sql, or all.",
+    )
+    parser.add_argument(
+        "--source",
+        default="",
+        help="For --stage sql: the sql_step name to execute.",
     )
     return parser.parse_args()
 
