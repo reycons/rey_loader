@@ -49,8 +49,8 @@ def main() -> None:
     args = _parse_args()
     apply_env_overrides(args.env_overrides)
 
-    if not args.config_path:
-        raise SystemExit("--config-path is required.")
+    # build_ctx_from_args accepts either --config-path (standalone) or
+    # --ctx-file (pipeline step snapshot) and validates that one is present.
     ctx = build_ctx_from_args(args, app_name=APP_NAME)
 
     # Stamp batch start time on ctx before any stage runs.
