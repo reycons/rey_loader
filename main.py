@@ -79,7 +79,7 @@ def main() -> None:
         # Run-level pre hook: fires once per CLI invocation, before any stage.
         # Reads ctx.app_hooks (from config.{env}.yaml) and dispatches bindings
         # whose `hook` field is "hooks.pre_run" — e.g. begin_batch.
-        run_app_hooks(ctx, "hooks.pre_run", sql_dir=ctx.sql_dir)
+        run_app_hooks(ctx, "hooks.pre_run", sql_dir=getattr(ctx, "sql_dir", None))
 
         if args.stage in ("sync", "all"):
             run_sync(ctx)
@@ -92,7 +92,7 @@ def main() -> None:
 
         # Run-level post hook: fires once after all stages complete cleanly.
         # Bindings with `hook: hooks.post_run` — e.g. end_batch.
-        run_app_hooks(ctx, "hooks.post_run", sql_dir=ctx.sql_dir)
+        run_app_hooks(ctx, "hooks.post_run", sql_dir=getattr(ctx, "sql_dir", None))
 
         log.info("rey_loader complete.")
         sys.exit(0)
