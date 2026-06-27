@@ -18,7 +18,7 @@ __all__ = ["run_load"]
 
 _logger = get_logger(__name__)
 
-def run_load(ctx: Namespace) -> None:
+def run_load(ctx: Namespace) -> int:
     """Run the load stage for all configured data sources.
 
     Delegates to rey_lib.files.file_loader.run_load. All connection
@@ -30,6 +30,12 @@ def run_load(ctx: Namespace) -> None:
     ----------
     ctx : Namespace
         Application context built by build_ctx().
+
+    Returns
+    -------
+    int
+        Total number of rows loaded across all data sources.
     """
     total = _run_load(ctx, sql_dir=ctx.sql_dir)
     _logger.info("Load stage complete: %d row(s) loaded.", total)
+    return total

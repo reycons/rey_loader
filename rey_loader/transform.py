@@ -16,7 +16,7 @@ __all__ = ["run_transform"]
 _logger = get_logger(__name__)
 
 
-def run_transform(ctx: Namespace) -> None:
+def run_transform(ctx: Namespace) -> int:
     """Run the transform stage for all configured data sources.
 
     Delegates entirely to rey_lib.files.file_loader.run_transform.
@@ -26,6 +26,12 @@ def run_transform(ctx: Namespace) -> None:
     ----------
     ctx : Namespace
         Application context built by build_ctx().
+
+    Returns
+    -------
+    int
+        Number of files transformed across all data sources.
     """
     count = _run_transform(ctx)
     _logger.info("Transform stage complete: %d file(s) transformed.", count)
+    return count
