@@ -41,6 +41,10 @@ _logger = get_logger(__name__)
 
 CONTRACT = "SGC_Rey_Loader_Internal_Workflow_Refactor"
 
+# This app's identity. Workflow ownership is ``app + name``; rey_loader consumes
+# only workflows assigned to itself from the resolved ctx (never another app's).
+APP_NAME = "rey_loader"
+
 
 # ---------------------------------------------------------------------------
 # Step registry + handlers (RunContext-driven; each wraps an existing fn)
@@ -156,7 +160,12 @@ def run_workflow(
 # ---------------------------------------------------------------------------
 
 def _get_workflow(ctx: Any, name: str) -> Any:
-    """Return the named workflow config, or raise a clear error."""
+    """Return the named workflow config from the resolved ctx, or raise.
+
+    Consumes ``ctx.workflows`` only — no filesystem discovery — and enforces
+    ownership before returning: a workflow assigned to another app is refused,
+    so rey_loader can never list or run a workflow it does not own.
+    """
     workflows = getattr(ctx, "workflows", None)
     wf = None
     if isinstance(workflows, list):
@@ -170,7 +179,24 @@ def _get_workflow(ctx: Any, name: str) -> Any:
         raise ReyLoaderError(
             f"workflow '{name}' not found in rey_loader config (ctx.workflows)."
         )
+    _enforce_ownership(wf, name)
     return wf
+
+
+def _enforce_ownership(wf: Any, name: str) -> None:
+    """Refuse a workflow owned by another app (fail-closed on mismatch).
+
+    Ownership is the resolved workflow's ``app`` property, stamped during ctx
+    construction. An empty owner is treated as this app's (backward compatible
+    with workflows authored before ownership stamping); a foreign owner raises.
+    """
+    owner = getattr(wf, "app", None) if not isinstance(wf, dict) else wf.get("app")
+    owner = str(owner or "")
+    if owner and owner != APP_NAME:
+        raise ReyLoaderError(
+            f"Workflow {name} is assigned to {owner} and cannot be executed "
+            f"by {APP_NAME}."
+        )
 
 
 def _require(obj: Any, key: str, label: str) -> Any:
