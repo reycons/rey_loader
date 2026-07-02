@@ -25,17 +25,33 @@ build_registry  The loader step registry (name -> StepSpec).
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+from rey_lib.db.procedure_map import execute_mapped_routine, get_connection_config
+from rey_lib.files.file_utils import delete_file, move_file, visible_files
 from rey_lib.logs import get_logger
-from rey_lib.workflow import RunContext, StepResult, StepSpec, build_steps, run_steps
+from rey_lib.workflow import (
+    RunContext,
+    StepResult,
+    StepSpec,
+    build_steps,
+    run_steps,
+    run_workflow as coordinate_workflow,
+)
 
 from rey_loader.error_utils import ReyLoaderError
 from rey_loader.load import run_load
 from rey_loader.sql_apply import run_sql_apply
 from rey_loader.transform import run_transform
 
-__all__ = ["run_workflow", "build_registry"]
+__all__ = [
+    "run_workflow",
+    "build_registry",
+    "build_process_registry",
+    "run_process_workflow",
+    "is_process_workflow",
+]
 
 _logger = get_logger(__name__)
 
@@ -216,3 +232,303 @@ def _as_list(value: Any) -> list[Any]:
     if hasattr(value, "values") and not isinstance(value, (str, bytes)):
         return list(value.values())
     return [value]
+
+
+# ===========================================================================
+# Process model (SGC_Rey_Loader_Workflow_Process_Model)
+#
+# Loader workflows execute through the shared coordinator
+# (``rey_lib.workflow.run_workflow``) once per discovered file. This app owns a
+# small registry of generic process groups; the DB utility layer owns routine
+# execution; the workflow YAML owns sequencing. The legacy stage model above is
+# retained during the additive migration and is unchanged.
+#
+# NOTE: ``etl_operation`` is intentionally fail-closed here — real per-file
+# transform/load requires public per-file APIs from rey_lib and is delivered by
+# SGC_Rey_Loader_Public_Per_File_ETL_API_And_Hook_Removal. It refuses to run
+# rather than risk re-processing the whole batch per file.
+# ===========================================================================
+
+def build_process_registry(adapter: Any) -> dict[str, Any]:
+    """Return the loader's generic workflow process registry (name -> handler).
+
+    Exactly the four generic process groups loader workflows call; stored
+    procedures are routine bindings executed by the rey_lib DB utility layer,
+    never one Python function per routine.
+    """
+    def file_operation(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        return _process_file_operation(ctx, config, run)
+
+    def sql_operation(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        return _process_sql_operation(ctx, config, run, adapter)
+
+    def validate(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        return _process_validate(ctx, config, run)
+
+    def etl_operation(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        return _process_etl_operation(ctx, config, run)
+
+    return {
+        "file_operation": file_operation,
+        "sql_operation": sql_operation,
+        "validate": validate,
+        "etl_operation": etl_operation,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Coordinator-per-file runner
+# ---------------------------------------------------------------------------
+
+def is_process_workflow(ctx: Any, name: str) -> bool:
+    """Return True when the named workflow uses the process/step shape."""
+    try:
+        wf = _get_workflow(ctx, name)
+    except ReyLoaderError:
+        return False
+    return _get(wf, "processes") is not None
+
+
+def run_process_workflow(ctx: Any, adapter: Any, workflow_name: str, *, apply: bool = True) -> int:
+    """Execute a process-shape loader workflow: coordinator once per file.
+
+    Batch-scoped steps (create batch, discover, end batch) run once; the
+    contiguous block of ``scope: file`` steps runs once per discovered file with
+    ``ctx.current_file`` set. Batch and file lifecycle state (batch_id,
+    batch_step_id, discovered files) persists across coordinator calls on ctx.
+    Fails closed on any step failure.
+    """
+    wf = _get_workflow(ctx, workflow_name)
+    steps = _as_list(_require(wf, "steps", workflow_name))
+    registry = build_process_registry(adapter)
+    prefix, per_file, suffix = _partition_by_scope(steps)
+
+    if not _run_subset(ctx, wf, prefix, registry, apply, workflow_name):
+        return 1
+
+    for current in _discovered_files(ctx, prefix):
+        object.__setattr__(ctx, "current_file", current)
+        if not _run_subset(ctx, wf, per_file, registry, apply, workflow_name):
+            _logger.error("workflow '%s' failed on file: %s", workflow_name, current)
+            _run_subset(ctx, wf, suffix, registry, apply, workflow_name)
+            return 1
+
+    if not _run_subset(ctx, wf, suffix, registry, apply, workflow_name):
+        return 1
+
+    _logger.info("workflow '%s' complete (%s).",
+                 workflow_name, "apply" if apply else "dry-run")
+    return 0
+
+
+def _run_subset(ctx: Any, wf: Any, steps: list[Any], registry: dict[str, Any],
+                apply: bool, workflow_name: str) -> bool:
+    """Run a step subset through the shared coordinator; return success."""
+    if not steps:
+        return True
+    subworkflow = {
+        "name": _get(wf, "name"),
+        "tokens": _get(wf, "tokens"),
+        "processes": _get(wf, "processes"),
+        "steps": steps,
+    }
+    run = coordinate_workflow(ctx, subworkflow, registry, apply=apply)
+    if run.status != "success":
+        failed = next((o for o in run.outcomes if o.status == "failed"), None)
+        _logger.error("workflow '%s' failed at step: %s",
+                      workflow_name, failed.id if failed else "?")
+        return False
+    return True
+
+
+def _partition_by_scope(steps: list[Any]) -> tuple[list[Any], list[Any], list[Any]]:
+    """Split steps into (batch-prefix, contiguous per-file block, batch-suffix)."""
+    scopes = [str(_get(step, "scope", "") or "batch") for step in steps]
+    file_indices = [i for i, scope in enumerate(scopes) if scope == "file"]
+    if not file_indices:
+        return list(steps), [], []
+    first, last = file_indices[0], file_indices[-1]
+    return list(steps[:first]), list(steps[first:last + 1]), list(steps[last + 1:])
+
+
+def _discovered_files(ctx: Any, prefix: list[Any]) -> list[Any]:
+    """Return the file list a discover step stored on ctx (bounded, ordered)."""
+    for step in prefix:
+        config = _get(step, "config")
+        if str(_get(config, "operation", "")) == "discover":
+            key = str(_get(_get(config, "output"), "files", "") or "discovered_files")
+            return list(getattr(ctx, key, []) or [])
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Process handlers
+# ---------------------------------------------------------------------------
+
+def _process_sql_operation(ctx: Any, config: dict[str, Any], run: RunContext,
+                           adapter: Any) -> StepResult:
+    """Execute a control routine binding via the rey_lib DB utility layer.
+
+    Delegates entirely to ``execute_mapped_routine`` — no routine-binding
+    internals are parsed here. Runtime values come from the step config plus the
+    run context (batch_id/step ids loaded back onto ctx by the DB utility).
+    """
+    operation = str(_get(config, "operation", ""))
+    if operation != "execute_routine_binding":
+        raise ReyLoaderError(f"sql_operation: unsupported operation '{operation}'.")
+    procedure_map = _get(config, "procedure_map")
+    routine_name = _get(config, "routine_name")
+    if not procedure_map:
+        raise ReyLoaderError("sql_operation: missing 'procedure_map'.")
+    if not routine_name:
+        raise ReyLoaderError("sql_operation: missing 'routine_name'.")
+
+    values = dict(_plain_dict(_get(config, "values")))
+    conn = adapter.get_connection(get_connection_config(ctx, str(procedure_map)))
+    try:
+        execute_mapped_routine(ctx, conn, str(procedure_map), str(routine_name),
+                               values, run_ctx=ctx)
+    finally:
+        _close_quietly(conn)
+    return StepResult(f"sql:{routine_name}", "ok", str(routine_name))
+
+
+def _process_file_operation(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+    """Discover, move, or delete files against the data source's declared paths."""
+    operation = str(_get(config, "operation", ""))
+    if operation == "discover":
+        base = _data_source_path(ctx, config, str(_get(config, "path", "")))
+        pattern = str(_get(config, "pattern", "*"))
+        files = sorted(visible_files(base, pattern))
+        limit = _get(config, "max_files_per_run")
+        if limit:
+            files = files[:int(limit)]
+        key = str(_get(_get(config, "output"), "files", "") or "discovered_files")
+        object.__setattr__(ctx, key, [str(path) for path in files])
+        run.metadata["discovered_files"] = len(files)
+        return StepResult("file:discover", "ok", f"{len(files)} file(s)")
+
+    if operation == "move":
+        current = _current_file(ctx)
+        dest_dir = _data_source_path(ctx, config, str(_get(config, "to", "")))
+        moved = move_file(current, dest_dir)
+        new_path = Path(str(moved)) if moved else dest_dir / current.name
+        object.__setattr__(ctx, "current_file", str(new_path))
+        return StepResult("file:move", "ok", new_path.name)
+
+    if operation == "delete":
+        current = _current_file(ctx)
+        delete_file(current)
+        return StepResult("file:delete", "ok", current.name)
+
+    raise ReyLoaderError(f"file_operation: unsupported operation '{operation}'.")
+
+
+def _process_validate(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+    """Validate the current file per its data-source ``file_type`` (fail closed)."""
+    operation = str(_get(config, "operation", ""))
+    if operation != "validate_file":
+        raise ReyLoaderError(f"validate: unsupported operation '{operation}'.")
+    current = _current_file(ctx)
+    transform_cfg = _first_transform(_data_source(ctx, config))
+    file_type = str(_get(transform_cfg, "file_type", "") or "")
+    supported = {"delimited_header", "delimited_no_header", "fixed_width", "excel"}
+    if file_type not in supported:
+        raise ReyLoaderError(
+            f"validate: unsupported file_type '{file_type}' for {current.name}."
+        )
+    status = "ok"
+    if file_type == "delimited_header":
+        from rey_lib.files.file_loader import _validate_header  # noqa: PLC0415
+        if not _validate_header(current, transform_cfg):
+            status = "rejected"
+    object.__setattr__(ctx, "validation_status", status)
+    run.metadata["validation_status"] = status
+    if status != "ok":
+        return StepResult("validate", "failed", f"{file_type}: header mismatch")
+    return StepResult("validate", "ok", file_type)
+
+
+def _process_etl_operation(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+    """Fail closed — per-file transform/load is not yet wired (see NOTE above)."""
+    operation = str(_get(config, "operation", ""))
+    raise ReyLoaderError(
+        f"etl_operation '{operation}' is not yet wired to per-file transform/load. "
+        "Pending SGC_Rey_Loader_Public_Per_File_ETL_API_And_Hook_Removal — refusing "
+        "to run rather than risk re-processing the whole batch per file."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Process helpers
+# ---------------------------------------------------------------------------
+
+def _current_file(ctx: Any) -> Path:
+    """Return the current file path from run context, or fail closed."""
+    current = getattr(ctx, "current_file", None)
+    if not current:
+        raise ReyLoaderError("no current file in run context for this step.")
+    return Path(str(current))
+
+
+def _data_source(ctx: Any, config: dict[str, Any]) -> Any:
+    """Return the named data source record from ctx.data_sources (fail closed)."""
+    name = str(_get(config, "data_source", "") or "")
+    for data_source in _as_list(getattr(ctx, "data_sources", None)):
+        if str(_get(data_source, "name", "")) == name:
+            return data_source
+    raise ReyLoaderError(f"data source '{name}' not found in ctx.data_sources.")
+
+
+def _data_source_path(ctx: Any, config: dict[str, Any], key: str) -> Path:
+    """Resolve a named path key from the data source's declared paths."""
+    if not key:
+        raise ReyLoaderError("file_operation: missing path key.")
+    paths = _get(_data_source(ctx, config), "paths")
+    value = _get(paths, key)
+    if not value:
+        raise ReyLoaderError(f"file_operation: path key '{key}' not found on data source.")
+    return Path(str(value))
+
+
+def _first_transform(data_source: Any) -> Any:
+    """Return the data source's transform config (fail closed when absent)."""
+    transforms = _as_list(_get(data_source, "transforms"))
+    if not transforms:
+        raise ReyLoaderError("validate: data source has no transform config.")
+    return transforms[0]
+
+
+def _plain_dict(value: Any) -> dict[str, Any]:
+    """Return a plain dict view of a dict- or Namespace-like value."""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    if hasattr(value, "items"):
+        try:
+            return dict(value.items())
+        except Exception:  # noqa: BLE001 — fall through
+            pass
+    if hasattr(value, "__dict__"):
+        return {k: v for k, v in vars(value).items() if not k.startswith("_")}
+    return {}
+
+
+def _get(obj: Any, key: str, default: Any = None) -> Any:
+    """Return obj[key] / obj.key, or default."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _close_quietly(conn: Any) -> None:
+    """Close a DB connection, ignoring any close-time error."""
+    if conn is None:
+        return
+    try:
+        conn.close()
+    except Exception:  # noqa: BLE001 — close failures must not mask the result
+        pass
