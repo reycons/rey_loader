@@ -50,6 +50,7 @@ __all__ = [
     "build_registry",
     "build_process_registry",
     "run_process_workflow",
+    "run_file_workflow",
     "is_process_workflow",
 ]
 
@@ -289,76 +290,67 @@ def is_process_workflow(ctx: Any, name: str) -> bool:
     return _get(wf, "processes") is not None
 
 
-def run_process_workflow(ctx: Any, adapter: Any, workflow_name: str, *, apply: bool = True) -> int:
-    """Execute a process-shape loader workflow: coordinator once per file.
+def run_file_workflow(ctx: Any, adapter: Any, workflow_name: str, *,
+                      apply: bool = True, max_files: int = 100000) -> int:
+    """Repeatedly run a single-file workflow until discovery finds no file.
 
-    Batch-scoped steps (create batch, discover, end batch) run once; the
-    contiguous block of ``scope: file`` steps runs once per discovered file with
-    ``ctx.current_file`` set. Batch and file lifecycle state (batch_id,
-    batch_step_id, discovered files) persists across coordinator calls on ctx.
-    Fails closed on any step failure.
+    rey_loader owns the file-processing loop (the shared coordinator does not):
+    each ``run_process_workflow`` pass processes at most one discovered file,
+    bound to ``ctx.current_file`` by the ``discover_file`` step. When discovery
+    reports no eligible file (``ctx.no_file``) the loop stops cleanly. A dry-run
+    performs a single pass — files are not consumed, so repeating would
+    rediscover the same file. ``max_files`` bounds the loop as a safety net.
     """
-    wf = _get_workflow(ctx, workflow_name)
-    steps = _as_list(_require(wf, "steps", workflow_name))
-    registry = build_process_registry(adapter)
-    prefix, per_file, suffix = _partition_by_scope(steps)
-
-    if not _run_subset(ctx, wf, prefix, registry, apply, workflow_name):
-        return 1
-
-    for current in _discovered_files(ctx, prefix):
-        object.__setattr__(ctx, "current_file", current)
-        if not _run_subset(ctx, wf, per_file, registry, apply, workflow_name):
-            _logger.error("workflow '%s' failed on file: %s", workflow_name, current)
-            _run_subset(ctx, wf, suffix, registry, apply, workflow_name)
-            return 1
-
-    if not _run_subset(ctx, wf, suffix, registry, apply, workflow_name):
-        return 1
-
-    _logger.info("workflow '%s' complete (%s).",
-                 workflow_name, "apply" if apply else "dry-run")
+    processed = 0
+    while processed < max_files:
+        object.__setattr__(ctx, "current_file", None)
+        object.__setattr__(ctx, "no_file", False)
+        code = run_process_workflow(ctx, adapter, workflow_name, apply=apply)
+        if code != 0:
+            return code
+        if getattr(ctx, "no_file", False):
+            break
+        processed += 1
+        if not apply:
+            break
+    _logger.info("workflow '%s' processed %d file(s) (%s).",
+                 workflow_name, processed, "apply" if apply else "dry-run")
     return 0
 
 
-def _run_subset(ctx: Any, wf: Any, steps: list[Any], registry: dict[str, Any],
-                apply: bool, workflow_name: str) -> bool:
-    """Run a step subset through the shared coordinator; return success."""
-    if not steps:
-        return True
-    subworkflow = {
-        "name": _get(wf, "name"),
-        "tokens": _get(wf, "tokens"),
-        "processes": _get(wf, "processes"),
-        "steps": steps,
-    }
-    run = coordinate_workflow(ctx, subworkflow, registry, apply=apply)
+def run_process_workflow(ctx: Any, adapter: Any, workflow_name: str, *,
+                         apply: bool = True) -> int:
+    """Execute one single-file workflow pass through the shared coordinator.
+
+    The shared coordinator runs exactly one ordered pass and is unchanged for
+    this use case (no file-list / loop / foreach). ``discover_file`` binds a
+    single ``ctx.current_file`` or sets ``ctx.no_file``; file-scoped steps
+    (``config.scope: file``) are skipped when no file was found, so a no-file
+    pass ends cleanly while batch start/end still run. Returns 0 / 1.
+    """
+    wf = _get_workflow(ctx, workflow_name)
+    _require(wf, "steps", workflow_name)
+    registry = _guarded_registry(build_process_registry(adapter))
+    run = coordinate_workflow(ctx, wf, registry, apply=apply)
     if run.status != "success":
         failed = next((o for o in run.outcomes if o.status == "failed"), None)
         _logger.error("workflow '%s' failed at step: %s",
                       workflow_name, failed.id if failed else "?")
-        return False
-    return True
+        return 1
+    _logger.info("workflow '%s' pass complete (%s).",
+                 workflow_name, "apply" if apply else "dry-run")
+    return 0
 
 
-def _partition_by_scope(steps: list[Any]) -> tuple[list[Any], list[Any], list[Any]]:
-    """Split steps into (batch-prefix, contiguous per-file block, batch-suffix)."""
-    scopes = [str(_get(step, "scope", "") or "batch") for step in steps]
-    file_indices = [i for i, scope in enumerate(scopes) if scope == "file"]
-    if not file_indices:
-        return list(steps), [], []
-    first, last = file_indices[0], file_indices[-1]
-    return list(steps[:first]), list(steps[first:last + 1]), list(steps[last + 1:])
-
-
-def _discovered_files(ctx: Any, prefix: list[Any]) -> list[Any]:
-    """Return the file list a discover step stored on ctx (bounded, ordered)."""
-    for step in prefix:
-        config = _get(step, "config")
-        if str(_get(config, "operation", "")) == "discover":
-            key = str(_get(_get(config, "output"), "files", "") or "discovered_files")
-            return list(getattr(ctx, key, []) or [])
-    return []
+def _guarded_registry(registry: dict[str, Any]) -> dict[str, Any]:
+    """Wrap handlers to skip ``config.scope: file`` steps when no file was found."""
+    def guard(handler: Any) -> Any:
+        def wrapped(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+            if getattr(ctx, "no_file", False) and str(_get(config, "scope", "")) == "file":
+                return StepResult("skipped", "skipped", "no file")
+            return handler(ctx, config, run)
+        return wrapped
+    return {name: guard(handler) for name, handler in registry.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -374,28 +366,48 @@ def _process_sql_operation(ctx: Any, config: dict[str, Any], run: RunContext,
     run context (batch_id/step ids loaded back onto ctx by the DB utility).
     """
     operation = str(_get(config, "operation", ""))
-    if operation != "execute_routine_binding":
+    if operation not in {"execute_parameter_result", "execute_no_return",
+                         "execute_routine_binding"}:
         raise ReyLoaderError(f"sql_operation: unsupported operation '{operation}'.")
     procedure_map = _get(config, "procedure_map")
-    routine_name = _get(config, "routine_name")
+    routine = _get(config, "routine_binding") or _get(config, "routine_name")
     if not procedure_map:
         raise ReyLoaderError("sql_operation: missing 'procedure_map'.")
-    if not routine_name:
-        raise ReyLoaderError("sql_operation: missing 'routine_name'.")
+    if not routine:
+        raise ReyLoaderError("sql_operation: missing 'routine_binding'.")
 
-    values = dict(_plain_dict(_get(config, "values")))
+    params = _get(config, "params")
+    if params is None:
+        params = _get(config, "values")
+    values = dict(_plain_dict(params))
     conn = adapter.get_connection(get_connection_config(ctx, str(procedure_map)))
     try:
-        execute_mapped_routine(ctx, conn, str(procedure_map), str(routine_name),
+        execute_mapped_routine(ctx, conn, str(procedure_map), str(routine),
                                values, run_ctx=ctx)
     finally:
         _close_quietly(conn)
-    return StepResult(f"sql:{routine_name}", "ok", str(routine_name))
+    return StepResult(f"sql:{routine}", "ok", str(routine))
 
 
 def _process_file_operation(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
     """Discover, move, or delete files against the data source's declared paths."""
     operation = str(_get(config, "operation", ""))
+    if operation == "discover_file":
+        base = _data_source_path(ctx, config, str(_get(config, "path", "")))
+        pattern = str(_get(config, "pattern", "*"))
+        files = sorted(visible_files(base, pattern))
+        key = str(_get(_get(config, "output"), "current_file", "") or "current_file")
+        if not files:
+            object.__setattr__(ctx, "no_file", True)
+            object.__setattr__(ctx, key, None)
+            run.metadata["current_file"] = None
+            return StepResult("file:discover_file", "ok", "no file")
+        current = files[0]
+        object.__setattr__(ctx, "no_file", False)
+        object.__setattr__(ctx, key, str(current))
+        run.metadata["current_file"] = str(current)
+        return StepResult("file:discover_file", "ok", current.name)
+
     if operation == "discover":
         base = _data_source_path(ctx, config, str(_get(config, "path", "")))
         pattern = str(_get(config, "pattern", "*"))

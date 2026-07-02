@@ -39,7 +39,7 @@ from rey_lib.logs import get_logger, setup_logging
 from rey_lib.db.db_adapter import DBAdapter
 
 from rey_loader.error_utils import ReyLoaderError
-from rey_loader.workflow import is_process_workflow, run_process_workflow, run_workflow
+from rey_loader.workflow import is_process_workflow, run_file_workflow, run_workflow
 
 
 __all__: list[str] = []
@@ -92,10 +92,11 @@ def main() -> None:
              workflow_name, "apply" if apply else "dry-run")
 
     try:
-        # Process-shape workflows run through the shared coordinator (batch/step
-        # lifecycle is explicit sql_operation steps, not run-level hooks).
+        # Process-shape workflows run through the shared coordinator, one file
+        # per pass; rey_loader owns the repeat-until-no-file loop. Batch/step
+        # lifecycle is explicit sql_operation steps, not run-level hooks.
         if is_process_workflow(ctx, workflow_name):
-            code = run_process_workflow(ctx, DBAdapter(), workflow_name, apply=apply)
+            code = run_file_workflow(ctx, DBAdapter(), workflow_name, apply=apply)
             log.info("rey_loader complete.")
             sys.exit(code)
 

@@ -1,10 +1,11 @@
-"""Tests for the rey_loader process-model workflow spine.
+"""Tests for the rey_loader single-file process-model workflow.
 
-Covers SGC_Rey_Loader_Workflow_Process_Model (additive spine): the generic
-process registry, coordinator-once-per-file orchestration, sql_operation
-delegation to the rey_lib DB utility layer, file_operation discover/move/delete,
-validate file-type dispatch, and etl_operation failing closed (never re-running
-the batch per file).
+Covers SGC_Rey_Loader_Workflow_Process_Model + the single-file run model
+(SGC_Rey_Loader_Single_File_Workflow_Run_Model): the generic process registry,
+one coordinator pass per run, discover_file binding a single file or a no-file
+signal, the rey_loader repeat-until-no-file loop, no-file skipping of file-scoped
+steps, sql_operation delegation to the DB utility layer, and etl_operation
+failing closed (never re-running the batch).
 """
 
 from __future__ import annotations
@@ -18,13 +19,13 @@ from rey_lib.workflow import RunContext, StepResult
 
 from rey_loader.error_utils import ReyLoaderError
 from rey_loader.workflow import (
-    _partition_by_scope,
     _process_etl_operation,
     _process_file_operation,
     _process_sql_operation,
     _process_validate,
     build_process_registry,
     is_process_workflow,
+    run_file_workflow,
     run_process_workflow,
 )
 
@@ -36,8 +37,17 @@ class _NS:
         self.__dict__.update(kw)
 
 
+def _workflow(*steps, processes=None):
+    return _NS(
+        name="w", app="rey_loader",
+        processes=processes or _NS(file_operation=_NS(), sql_operation=_NS(),
+                                   validate=_NS(), etl_operation=_NS()),
+        steps=list(steps),
+    )
+
+
 # ---------------------------------------------------------------------------
-# Registry + detection + partition
+# Registry + detection
 # ---------------------------------------------------------------------------
 
 def test_build_process_registry_exposes_generic_groups():
@@ -52,57 +62,85 @@ def test_is_process_workflow_detects_processes_block():
     assert is_process_workflow(ctx2, "s") is False
 
 
-def test_partition_by_scope_splits_prefix_perfile_suffix():
-    steps = [_NS(id="a"), _NS(id="b", scope="file"), _NS(id="c", scope="file"), _NS(id="d")]
-    prefix, per_file, suffix = _partition_by_scope(steps)
-    assert [s.id for s in prefix] == ["a"]
-    assert [s.id for s in per_file] == ["b", "c"]
-    assert [s.id for s in suffix] == ["d"]
-
-
 # ---------------------------------------------------------------------------
-# Coordinator-once-per-file orchestration
+# Single coordinator pass + rey_loader repeat loop
 # ---------------------------------------------------------------------------
 
-def test_run_process_workflow_runs_coordinator_once_per_file():
-    calls: list[tuple] = []
+def test_run_process_workflow_is_a_single_ordered_pass():
+    order: list = []
 
-    def discover(ctx, config, run):
-        object.__setattr__(ctx, "discovered_files", ["f1", "f2"])
-        calls.append(("discover", None))
-        return StepResult("d", "ok")
+    def handler(ctx, config, run):
+        order.append(config.get("marker"))
+        return StepResult("x", "ok")
 
-    def per_file(ctx, config, run):
-        calls.append(("validate", getattr(ctx, "current_file", None)))
-        return StepResult("v", "ok")
-
-    def end_batch(ctx, config, run):
-        calls.append(("end_batch", None))
-        return StepResult("e", "ok")
-
-    stub = {"file_operation": discover, "validate": per_file,
-            "sql_operation": end_batch, "etl_operation": per_file}
-
-    wf = _NS(
-        name="w", app="rey_loader",
-        processes=_NS(file_operation=_NS(), validate=_NS(), sql_operation=_NS(),
-                      etl_operation=_NS()),
-        steps=[
-            _NS(id="discover_files", process="file_operation",
-                config=_NS(operation="discover", output=_NS(files="discovered_files"))),
-            _NS(id="validate_file", process="validate", scope="file",
-                config=_NS(operation="validate_file")),
-            _NS(id="end_batch", process="sql_operation",
-                config=_NS(operation="execute_routine_binding")),
-        ],
+    stub = {"file_operation": handler, "sql_operation": handler,
+            "validate": handler, "etl_operation": handler}
+    wf = _workflow(
+        _NS(id="s1", process="sql_operation", config=_NS(marker="s1")),
+        _NS(id="s2", process="file_operation", config=_NS(marker="s2",
+                                                          operation="discover_file")),
+        _NS(id="s3", process="validate", config=_NS(marker="s3")),
     )
     ctx = _NS(workflows=[wf])
     with patch("rey_loader.workflow.build_process_registry", return_value=stub):
         code = run_process_workflow(ctx, object(), "w", apply=True)
-
     assert code == 0
-    assert calls == [("discover", None), ("validate", "f1"),
-                     ("validate", "f2"), ("end_batch", None)]
+    assert order == ["s1", "s2", "s3"]
+
+
+def test_run_file_workflow_repeats_until_no_file():
+    calls = {"n": 0}
+
+    def fake_pass(ctx, adapter, name, *, apply=True):
+        calls["n"] += 1
+        object.__setattr__(ctx, "no_file", calls["n"] >= 3)
+        return 0
+
+    ctx = _NS()
+    with patch("rey_loader.workflow.run_process_workflow", side_effect=fake_pass):
+        code = run_file_workflow(ctx, object(), "w", apply=True)
+    assert code == 0
+    assert calls["n"] == 3  # two files processed, third pass finds no file
+
+
+def test_run_file_workflow_dry_run_is_single_pass():
+    calls = {"n": 0}
+
+    def fake_pass(ctx, adapter, name, *, apply=True):
+        calls["n"] += 1
+        object.__setattr__(ctx, "no_file", False)  # a file is always available
+        return 0
+
+    ctx = _NS()
+    with patch("rey_loader.workflow.run_process_workflow", side_effect=fake_pass):
+        run_file_workflow(ctx, object(), "w", apply=False)
+    assert calls["n"] == 1  # dry-run does not consume files, so it runs once
+
+
+def test_no_file_skips_file_scoped_steps():
+    ran: list = []
+
+    def discover(ctx, config, run):
+        object.__setattr__(ctx, "no_file", True)
+        ran.append("discover")
+        return StepResult("d", "ok")
+
+    def handler(ctx, config, run):
+        ran.append(config.get("id"))
+        return StepResult("x", "ok")
+
+    stub = {"file_operation": discover, "sql_operation": handler,
+            "validate": handler, "etl_operation": handler}
+    wf = _workflow(
+        _NS(id="discover", process="file_operation", config=_NS(operation="discover_file")),
+        _NS(id="batch_step", process="sql_operation", config=_NS(id="batch_step")),
+        _NS(id="file_step", process="validate", config=_NS(id="file_step", scope="file")),
+    )
+    ctx = _NS(workflows=[wf], no_file=False)
+    with patch("rey_loader.workflow.build_process_registry", return_value=stub):
+        run_process_workflow(ctx, object(), "w", apply=True)
+    assert "discover" in ran and "batch_step" in ran  # batch-scoped steps run
+    assert "file_step" not in ran                      # file-scoped step skipped
 
 
 # ---------------------------------------------------------------------------
@@ -111,8 +149,8 @@ def test_run_process_workflow_runs_coordinator_once_per_file():
 
 def test_sql_operation_delegates_to_db_utils():
     ctx = _NS()
-    config = {"operation": "execute_routine_binding", "procedure_map": "control",
-              "routine_name": "start_batch", "values": {"batch_name": "B"}}
+    config = {"operation": "execute_parameter_result", "procedure_map": "control",
+              "routine_binding": "start_batch", "params": {"batch_name": "B"}}
     adapter = MagicMock()
     with patch("rey_loader.workflow.get_connection_config", return_value="conn_cfg"), \
          patch("rey_loader.workflow.execute_mapped_routine") as emr:
@@ -132,16 +170,29 @@ def test_sql_operation_unsupported_operation_fails_closed():
 # file_operation
 # ---------------------------------------------------------------------------
 
-def test_file_operation_discover_resolves_path_and_stores_files(tmp_path):
+def test_discover_file_binds_a_single_file(tmp_path):
     (tmp_path / "tran_1.csv").write_text("x")
     (tmp_path / "tran_2.csv").write_text("y")
     ds = _NS(name="advantage", paths=_NS(inbox_path=str(tmp_path)))
     ctx = _NS(data_sources=[ds])
-    config = {"operation": "discover", "data_source": "advantage", "path": "inbox_path",
-              "pattern": "tran_*.csv", "output": {"files": "discovered_files"}}
+    config = {"operation": "discover_file", "data_source": "advantage",
+              "path": "inbox_path", "pattern": "tran_*.csv",
+              "output": {"current_file": "current_file"}}
     result = _process_file_operation(ctx, config, RunContext(metadata={}))
     assert result.status == "ok"
-    assert sorted(Path(f).name for f in ctx.discovered_files) == ["tran_1.csv", "tran_2.csv"]
+    assert Path(ctx.current_file).name == "tran_1.csv"   # single, first in order
+    assert ctx.no_file is False
+
+
+def test_discover_file_no_file_sets_flag(tmp_path):
+    ds = _NS(name="advantage", paths=_NS(inbox_path=str(tmp_path)))
+    ctx = _NS(data_sources=[ds])
+    config = {"operation": "discover_file", "data_source": "advantage",
+              "path": "inbox_path", "pattern": "tran_*.csv",
+              "output": {"current_file": "current_file"}}
+    result = _process_file_operation(ctx, config, RunContext(metadata={}))
+    assert result.status == "ok" and result.detail == "no file"
+    assert ctx.no_file is True and ctx.current_file is None
 
 
 def test_file_operation_move_uses_destination_key(tmp_path):
@@ -152,8 +203,7 @@ def test_file_operation_move_uses_destination_key(tmp_path):
                return_value=tmp_path / "proc" / "f.csv") as mv:
         result = _process_file_operation(ctx, config, RunContext())
     mv.assert_called_once()
-    assert result.status == "ok"
-    assert ctx.current_file.endswith("proc/f.csv")
+    assert result.status == "ok" and ctx.current_file.endswith("proc/f.csv")
 
 
 def test_file_operation_delete_refuses_missing_current_file():
