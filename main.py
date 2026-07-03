@@ -33,7 +33,6 @@ preparse_config_args()
 
 from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_from_args
 from rey_lib.errors.error_utils import AppError, handle_exception
-from rey_lib.files.file_loader import run_app_hooks
 from rey_lib.logs import get_logger, setup_logging
 
 from rey_lib.db.db_adapter import DBAdapter
@@ -107,16 +106,7 @@ def main() -> None:
             log.info("rey_loader complete.")
             sys.exit(code)
 
-        # Run-level pre hook: fires once per invocation before the workflow.
-        # Bindings with `hook: hooks.pre_run` — e.g. begin_batch.
-        run_app_hooks(ctx, "hooks.pre_run", sql_dir=getattr(ctx, "sql_dir", None))
-
         code = run_workflow(ctx, workflow_name, source=args.source, apply=apply)
-
-        # Run-level post hook fires once, only after a clean workflow run.
-        # Bindings with `hook: hooks.post_run` — e.g. end_batch.
-        if code == 0:
-            run_app_hooks(ctx, "hooks.post_run", sql_dir=getattr(ctx, "sql_dir", None))
 
         log.info("rey_loader complete.")
         sys.exit(code)

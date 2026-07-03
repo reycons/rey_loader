@@ -240,9 +240,52 @@ def test_validate_unsupported_file_type_fails_closed(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# etl_operation fails closed (never re-runs the batch per file)
+# etl_operation delegates to the public per-file APIs (never the batch runners)
 # ---------------------------------------------------------------------------
 
-def test_etl_operation_fails_closed():
-    with pytest.raises(ReyLoaderError, match="not yet wired"):
-        _process_etl_operation(_NS(), {"operation": "transform_file"}, RunContext())
+def test_etl_transform_calls_transform_one_with_current_file():
+    ctx = _NS(current_file="/x/f.csv", data_sources=[_NS(name="advantage")])
+    with patch("rey_loader.workflow.transform_one", return_value=True) as t1:
+        result = _process_etl_operation(ctx, {"operation": "transform_file",
+                                              "data_source": "advantage"},
+                                        RunContext(metadata={}))
+    args = t1.call_args[0]
+    assert str(args[2]).endswith("f.csv")   # the single current file
+    assert result.status == "ok"
+
+
+def test_etl_load_calls_load_one_with_current_file():
+    ds = _NS(name="advantage", loads=[_NS(name="ld")])
+    ctx = _NS(current_file="/x/f.csv", data_sources=[ds])
+    with patch("rey_loader.workflow.load_one", return_value=42) as l1:
+        result = _process_etl_operation(ctx, {"operation": "load_file",
+                                              "data_source": "advantage"},
+                                        RunContext(metadata={}))
+    assert str(l1.call_args[0][3]).endswith("f.csv")
+    assert result.status == "ok" and "42" in result.detail
+
+
+def test_etl_never_calls_the_batch_runners():
+    ctx = _NS(current_file="/x/f.csv", data_sources=[_NS(name="advantage")])
+    with patch("rey_loader.workflow.transform_one", return_value=True), \
+         patch("rey_lib.files.file_loader.run_transform",
+               side_effect=AssertionError("batch runner must not be called")), \
+         patch("rey_lib.files.file_loader.run_load",
+               side_effect=AssertionError("batch runner must not be called")):
+        _process_etl_operation(ctx, {"operation": "transform_file",
+                                     "data_source": "advantage"}, RunContext(metadata={}))
+
+
+def test_etl_transform_rejected_fails_closed():
+    ctx = _NS(current_file="/x/f.csv", data_sources=[_NS(name="advantage")])
+    with patch("rey_loader.workflow.transform_one", return_value=False):
+        with pytest.raises(ReyLoaderError, match="rejected"):
+            _process_etl_operation(ctx, {"operation": "transform_file",
+                                         "data_source": "advantage"}, RunContext(metadata={}))
+
+
+def test_etl_unsupported_operation_fails_closed():
+    ctx = _NS(current_file="/x/f.csv", data_sources=[_NS(name="advantage")])
+    with pytest.raises(ReyLoaderError, match="unsupported operation"):
+        _process_etl_operation(ctx, {"operation": "nope", "data_source": "advantage"},
+                               RunContext(metadata={}))

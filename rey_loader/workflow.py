@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from rey_lib.db.procedure_map import execute_mapped_routine, get_connection_config
+from rey_lib.files.file_loader import load_one, transform_one, validate_one
 from rey_lib.files.file_utils import delete_file, move_file, visible_files
 from rey_lib.logs import get_logger
 from rey_lib.workflow import (
@@ -450,10 +451,8 @@ def _process_validate(ctx: Any, config: dict[str, Any], run: RunContext) -> Step
             f"validate: unsupported file_type '{file_type}' for {current.name}."
         )
     status = "ok"
-    if file_type == "delimited_header":
-        from rey_lib.files.file_loader import _validate_header  # noqa: PLC0415
-        if not _validate_header(current, transform_cfg):
-            status = "rejected"
+    if file_type == "delimited_header" and not validate_one(current, transform_cfg):
+        status = "rejected"
     object.__setattr__(ctx, "validation_status", status)
     run.metadata["validation_status"] = status
     if status != "ok":
@@ -462,13 +461,27 @@ def _process_validate(ctx: Any, config: dict[str, Any], run: RunContext) -> Step
 
 
 def _process_etl_operation(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
-    """Fail closed — per-file transform/load is not yet wired (see NOTE above)."""
+    """Transform or load exactly the current file via the public per-file APIs.
+
+    Delegates to ``rey_lib.files.file_loader.transform_one`` / ``load_one`` for
+    ``ctx.current_file`` only — never the batch runners, never rediscovery.
+    """
     operation = str(_get(config, "operation", ""))
-    raise ReyLoaderError(
-        f"etl_operation '{operation}' is not yet wired to per-file transform/load. "
-        "Pending SGC_Rey_Loader_Public_Per_File_ETL_API_And_Hook_Removal — refusing "
-        "to run rather than risk re-processing the whole batch per file."
-    )
+    current = _current_file(ctx)
+    data_source = _data_source(ctx, config)
+
+    if operation == "transform_file":
+        if not transform_one(ctx, data_source, current):
+            raise ReyLoaderError(f"etl_operation: transform rejected file '{current.name}'.")
+        return StepResult("etl:transform_file", "ok", current.name)
+
+    if operation == "load_file":
+        load_cfg = _first_load(data_source)
+        rows = load_one(ctx, data_source, load_cfg, current)
+        run.metadata["loaded_rows"] = rows
+        return StepResult("etl:load_file", "ok", f"{rows} row(s)")
+
+    raise ReyLoaderError(f"etl_operation: unsupported operation '{operation}'.")
 
 
 # ---------------------------------------------------------------------------
@@ -509,6 +522,14 @@ def _first_transform(data_source: Any) -> Any:
     if not transforms:
         raise ReyLoaderError("validate: data source has no transform config.")
     return transforms[0]
+
+
+def _first_load(data_source: Any) -> Any:
+    """Return the data source's load config (fail closed when absent)."""
+    loads = _as_list(_get(data_source, "loads"))
+    if not loads:
+        raise ReyLoaderError("etl_operation: data source has no load config.")
+    return loads[0]
 
 
 def _plain_dict(value: Any) -> dict[str, Any]:
