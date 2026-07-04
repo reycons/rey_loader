@@ -38,7 +38,7 @@ from rey_lib.logs import get_logger, setup_logging
 from rey_lib.db.db_adapter import DBAdapter
 
 from rey_loader.error_utils import ReyLoaderError
-from rey_loader.workflow import is_process_workflow, run_file_workflow, run_workflow
+from rey_loader.workflow import needs_file_loop, run_file_workflow, run_process_workflow
 
 
 __all__: list[str] = []
@@ -57,7 +57,6 @@ _STAGE_TO_WORKFLOW = {
     "all":       "transform_load",
     "sql":       "sql_apply",
 }
-_SQL_WORKFLOW = "sql_apply"
 
 
 # ---------------------------------------------------------------------------
@@ -91,22 +90,16 @@ def main() -> None:
              workflow_name, "apply" if apply else "dry-run")
 
     try:
-        # Process-shape workflows run through the shared coordinator, one file
-        # per pass; rey_loader owns the repeat-until-no-file loop. Batch/step
-        # lifecycle is explicit sql_operation steps, not run-level hooks.
-        if is_process_workflow(ctx, workflow_name):
+        # All loader workflows use the shared process/step shape and run through
+        # the shared coordinator. Single-file workflows (a discover_file step)
+        # run under rey_loader's repeat-until-no-file loop; batch workflows run
+        # exactly one ordered pass. Batch/step lifecycle is explicit sql_operation
+        # steps, not run-level hooks.
+        if needs_file_loop(ctx, workflow_name):
             code = run_file_workflow(ctx, DBAdapter(), workflow_name, apply=apply)
-            log.info("rey_loader complete.")
-            sys.exit(code)
-
-        # The sql_apply workflow is self-contained — it does not participate in
-        # the file-ingestion batch (no begin_batch/end_batch hooks).
-        if workflow_name == _SQL_WORKFLOW:
-            code = run_workflow(ctx, workflow_name, source=args.source, apply=apply)
-            log.info("rey_loader complete.")
-            sys.exit(code)
-
-        code = run_workflow(ctx, workflow_name, source=args.source, apply=apply)
+        else:
+            code = run_process_workflow(ctx, DBAdapter(), workflow_name,
+                                        apply=apply, source=args.source)
 
         log.info("rey_loader complete.")
         sys.exit(code)

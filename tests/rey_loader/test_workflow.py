@@ -1,14 +1,11 @@
 """
-Tests for the rey_loader internal workflow refactor.
+Tests for rey_loader internal ETL workflows via the shared coordinator.
 
-Coverage:
-  TestStepEngine        — ordering, fail-closed, and dry-run/apply behaviour of
-                          the loader steps via the shared engine (run_load mocked
-                          so no database is touched).
-  TestRunWorkflow       — run_workflow integration: config lookup, return codes,
-                          unknown-workflow error.
-  TestTransformUnchanged — the transform-files step produces the same converted
-                          output as before (orchestration did not change transform).
+The private ``run_steps`` engine was retired
+(SGC_Rey_Loader_Workflow_Coordinator_Alignment); these tests prove the migrated
+batch workflows preserve the same behaviour through ``rey_lib.workflow.run_workflow``:
+step order, fail-closed stop, dry-run apply_only skipping, return codes, and
+unchanged transform output (run_load mocked so no database is touched).
 """
 
 from __future__ import annotations
@@ -19,24 +16,45 @@ from unittest.mock import patch
 
 import pytest
 
-from rey_lib.workflow import RunContext, build_steps, run_steps
+from rey_lib.workflow import run_workflow as coordinate_workflow
 
 from rey_loader.error_utils import ReyLoaderError
-from rey_loader.workflow import build_registry, run_workflow
+from rey_loader.workflow import build_process_registry, run_process_workflow
 
 from tests.conftest import write_advantage_csv
 
 
-_TRANSFORM_LOAD = ["transform-files", "load-files", "validate-load"]
+def _transform_load() -> dict:
+    """The transform_load workflow in the shared process/step shape."""
+    return {
+        "name": "transform_load",
+        "processes": {
+            "transform_files": {},
+            "load_files": {"apply_only": True},
+            "validate_load": {},
+        },
+        "steps": [
+            {"id": "transform_files", "label": "Transform files", "process": "transform_files"},
+            {"id": "load_files", "label": "Load files", "process": "load_files"},
+            {"id": "validate_load", "label": "Validate load", "process": "validate_load"},
+        ],
+    }
 
 
-def _with_workflows(ctx: Namespace) -> Namespace:
-    """Attach the internal workflow definitions to a test ctx."""
+def _attach_workflows(ctx: Namespace) -> Namespace:
+    """Attach the internal process-shaped workflow definitions to a test ctx.
+
+    ctx.workflows items are attribute-accessed by rey_loader, so use Namespace
+    (mirroring resolved config), with dict processes/steps the coordinator reads.
+    """
     object.__setattr__(ctx, "workflows", [
-        Namespace(name="transform_load", steps=list(_TRANSFORM_LOAD)),
-        Namespace(name="transform_only", steps=["transform-files"]),
-        Namespace(name="load_only", steps=["load-files", "validate-load"]),
-        Namespace(name="sql_apply", steps=["sql-apply"]),
+        Namespace(**_transform_load()),
+        Namespace(
+            name="transform_only",
+            processes={"transform_files": {}},
+            steps=[{"id": "transform_files", "label": "Transform files",
+                    "process": "transform_files"}],
+        ),
     ])
     return ctx
 
@@ -45,113 +63,112 @@ def _converted(ctx: Namespace) -> Path:
     return ctx.data_sources[0].paths.converted_path
 
 
-# ---------------------------------------------------------------------------
-# TestStepEngine
-# ---------------------------------------------------------------------------
-
-class TestStepEngine:
-    """Loader steps run through the shared engine."""
-
-    def test_steps_run_in_order(self, ctx: Namespace) -> None:
-        """transform-files -> load-files -> validate-load, recording metadata."""
-        write_advantage_csv(ctx.data_sources[0].paths.inbox_path, "tran_20260501.csv")
-        run_ctx = RunContext(apply=True, data={"ctx": ctx, "source": ""})
-        steps = build_steps(_TRANSFORM_LOAD, build_registry())
-
-        with patch("rey_loader.workflow.run_load", return_value=7) as mock_load:
-            result = run_steps(steps, run_ctx, name="transform_load")
-
-        assert result.status == "success"
-        assert [s["name"] for s in run_ctx.metadata["steps"]] == _TRANSFORM_LOAD
-        assert run_ctx.metadata["loaded_rows"] == 7
-        assert run_ctx.metadata["validation_result"] == "7 row(s) loaded"
-        mock_load.assert_called_once_with(ctx)
-
-    def test_fail_closed_stops_at_failing_step(self, ctx: Namespace) -> None:
-        """A failing load stops the workflow; validate-load never runs."""
-        write_advantage_csv(ctx.data_sources[0].paths.inbox_path, "tran_20260501.csv")
-        run_ctx = RunContext(apply=True, data={"ctx": ctx, "source": ""})
-        steps = build_steps(_TRANSFORM_LOAD, build_registry())
-
-        with patch("rey_loader.workflow.run_load", side_effect=RuntimeError("db down")):
-            result = run_steps(steps, run_ctx, name="transform_load")
-
-        assert result.status == "failed"
-        assert [s["status"] for s in run_ctx.metadata["steps"]] == ["ok", "failed"]
-        assert "validation_result" not in run_ctx.metadata
-
-    def test_dry_run_skips_load_but_transforms(self, ctx: Namespace) -> None:
-        """Dry-run skips the apply_only load step; transform still runs."""
-        converted = _converted(ctx)
-        write_advantage_csv(ctx.data_sources[0].paths.inbox_path, "tran_20260501.csv")
-        run_ctx = RunContext(apply=False, data={"ctx": ctx, "source": ""})
-        steps = build_steps(_TRANSFORM_LOAD, build_registry())
-
-        with patch("rey_loader.workflow.run_load") as mock_load:
-            result = run_steps(steps, run_ctx, name="transform_load")
-
-        assert result.status == "success"
-        mock_load.assert_not_called()
-        assert run_ctx.metadata["validation_result"] == "skipped (load not applied)"
-        assert list(converted.glob("tran_20260501_v01.csv")), "transform must still run"
+def _inbox(ctx: Namespace) -> Path:
+    return ctx.data_sources[0].paths.inbox_path
 
 
 # ---------------------------------------------------------------------------
-# TestRunWorkflow
+# Coordinator mechanics (inspecting the WorkflowRun directly)
 # ---------------------------------------------------------------------------
 
-class TestRunWorkflow:
-    """run_workflow resolves config and returns process exit codes."""
+def test_steps_run_in_order_and_record_metadata(ctx: Namespace) -> None:
+    """transform_files -> load_files -> validate_load, recording run metadata."""
+    write_advantage_csv(_inbox(ctx), "tran_20260501.csv")
+    registry = build_process_registry(object())
 
-    def test_transform_only_succeeds(self, ctx: Namespace) -> None:
-        """transform_only runs transform and returns 0."""
-        _with_workflows(ctx)
-        converted = _converted(ctx)
-        write_advantage_csv(ctx.data_sources[0].paths.inbox_path, "tran_20260501.csv")
-        assert run_workflow(ctx, "transform_only", apply=True) == 0
-        assert list(converted.glob("tran_20260501_v01.csv"))
+    with patch("rey_loader.workflow.run_load", return_value=7) as mock_load:
+        run = coordinate_workflow(ctx, _transform_load(), registry, apply=True)
 
-    def test_failure_returns_one(self, ctx: Namespace) -> None:
-        """A failing step makes run_workflow return 1 (fail-closed)."""
-        _with_workflows(ctx)
-        write_advantage_csv(ctx.data_sources[0].paths.inbox_path, "tran_20260501.csv")
-        with patch("rey_loader.workflow.run_load", side_effect=RuntimeError("x")):
-            assert run_workflow(ctx, "transform_load", apply=True) == 1
+    assert run.status == "success"
+    assert [o.id for o in run.outcomes] == ["transform_files", "load_files", "validate_load"]
+    assert run.context.metadata["loaded_rows"] == 7
+    assert run.context.metadata["validation_result"] == "7 row(s) loaded"
+    mock_load.assert_called_once_with(ctx)
 
-    def test_unknown_workflow_raises(self, ctx: Namespace) -> None:
-        """An unknown workflow name fails closed with a clear error."""
-        _with_workflows(ctx)
-        with pytest.raises(ReyLoaderError, match="not found"):
-            run_workflow(ctx, "does_not_exist")
+
+def test_fail_closed_stops_at_failing_step(ctx: Namespace) -> None:
+    """A failing load stops the workflow; validate_load never runs."""
+    write_advantage_csv(_inbox(ctx), "tran_20260501.csv")
+    registry = build_process_registry(object())
+
+    with patch("rey_loader.workflow.run_load", side_effect=RuntimeError("db down")):
+        run = coordinate_workflow(ctx, _transform_load(), registry, apply=True)
+
+    assert run.status == "failed"
+    assert [o.status for o in run.outcomes] == ["ok", "failed"]
+    assert "validation_result" not in run.context.metadata
+
+
+def test_dry_run_skips_load_but_transforms(ctx: Namespace) -> None:
+    """Dry-run skips the apply_only load step; transform still runs."""
+    converted = _converted(ctx)
+    write_advantage_csv(_inbox(ctx), "tran_20260501.csv")
+    registry = build_process_registry(object())
+
+    with patch("rey_loader.workflow.run_load") as mock_load:
+        run = coordinate_workflow(ctx, _transform_load(), registry, apply=False)
+
+    assert run.status == "success"
+    mock_load.assert_not_called()
+    assert run.context.metadata["validation_result"] == "skipped (load not applied)"
+    assert list(converted.glob("tran_20260501_v01.csv")), "transform must still run"
 
 
 # ---------------------------------------------------------------------------
-# TestTransformUnchanged
+# run_process_workflow runner (config lookup + exit codes)
 # ---------------------------------------------------------------------------
 
-class TestTransformUnchanged:
-    """The refactor must not change transform output."""
+def test_transform_only_succeeds(ctx: Namespace) -> None:
+    """transform_only runs transform and returns 0."""
+    _attach_workflows(ctx)
+    converted = _converted(ctx)
+    write_advantage_csv(_inbox(ctx), "tran_20260501.csv")
+    assert run_process_workflow(ctx, object(), "transform_only", apply=True) == 0
+    assert list(converted.glob("tran_20260501_v01.csv"))
 
-    def _read_rows(self, path: Path, glob: str) -> list[dict[str, str]]:
-        import csv
-        matches = sorted(path.glob(glob))
-        assert matches, f"no output matching {glob} in {path}"
-        with matches[0].open(encoding="utf-8-sig") as fh:
-            return list(csv.DictReader(fh))
 
-    def test_workflow_transform_output_matches_expected(self, ctx: Namespace) -> None:
-        """Running transform via the workflow yields the same converted rows."""
-        converted = _converted(ctx)
-        write_advantage_csv(ctx.data_sources[0].paths.inbox_path, "tran_20260501.csv")
-        run_ctx = RunContext(apply=True, data={"ctx": ctx, "source": ""})
-        steps = build_steps(["transform-files"], build_registry())
+def test_failure_returns_one(ctx: Namespace) -> None:
+    """A failing step makes the runner return 1 (fail-closed)."""
+    _attach_workflows(ctx)
+    write_advantage_csv(_inbox(ctx), "tran_20260501.csv")
+    with patch("rey_loader.workflow.run_load", side_effect=RuntimeError("x")):
+        assert run_process_workflow(ctx, object(), "transform_load", apply=True) == 1
 
-        result = run_steps(steps, run_ctx, name="transform_only")
 
-        assert result.status == "success"
-        rows = self._read_rows(converted, "tran_20260501_v01.csv")
-        assert rows, "no output rows"
-        for row in rows:
-            assert row.get("broker") == "advantage"
-            assert row.get("record_source") == "CSV Import"
-            assert "2026" in row.get("trade_date", "")
+def test_unknown_workflow_raises(ctx: Namespace) -> None:
+    """An unknown workflow name fails closed with a clear error."""
+    _attach_workflows(ctx)
+    with pytest.raises(ReyLoaderError, match="not found"):
+        run_process_workflow(ctx, object(), "does_not_exist")
+
+
+# ---------------------------------------------------------------------------
+# Transform output must be unchanged by the migration
+# ---------------------------------------------------------------------------
+
+def test_workflow_transform_output_matches_expected(ctx: Namespace) -> None:
+    """Running transform via the coordinator yields the same converted rows."""
+    import csv
+
+    converted = _converted(ctx)
+    write_advantage_csv(_inbox(ctx), "tran_20260501.csv")
+    registry = build_process_registry(object())
+    workflow = {
+        "name": "transform_only",
+        "processes": {"transform_files": {}},
+        "steps": [{"id": "transform_files", "label": "Transform files",
+                   "process": "transform_files"}],
+    }
+
+    run = coordinate_workflow(ctx, workflow, registry, apply=True)
+
+    assert run.status == "success"
+    matches = sorted(converted.glob("tran_20260501_v01.csv"))
+    assert matches, "no converted output"
+    with matches[0].open(encoding="utf-8-sig") as fh:
+        rows = list(csv.DictReader(fh))
+    assert rows, "no output rows"
+    for row in rows:
+        assert row.get("broker") == "advantage"
+        assert row.get("record_source") == "CSV Import"
+        assert "2026" in row.get("trade_date", "")

@@ -1,26 +1,31 @@
 """
-rey_loader internal ETL workflows — step registry, handlers, and runner.
+rey_loader workflows — process registry, handlers, and runners.
 
-Ownership: the shared engine (``rey_lib.workflow``) owns orchestration mechanics
-(ordered execution, fail-closed behaviour, dry-run/apply propagation, run
-context, step results, run metadata). This module owns only the loader domain:
-the step *registry* and *handlers* that wrap the existing, unchanged loader
-functions (transform, load, validate, sql-apply).
+Ownership: the shared coordinator (``rey_lib.workflow.run_workflow``) owns all
+workflow execution mechanics (sequencing, step/range selection, fail-closed
+behaviour, dry-run/apply propagation, run context, outcomes). This module owns
+only the loader domain: the process *registry* and *handlers* that wrap the
+existing, unchanged loader functions (transform, load, validate, sql-apply, and
+the per-file ingestion groups), plus the loader-owned single-file loop.
 
 This is an orchestration refactor only — every handler calls the existing loader
 function as-is. No transform/load behaviour, output, config semantics, or
-success/failure rules change here. FTP is NOT a loader concern: there is no
-sync/ftp step (``pipeline_coordinator`` sequences ftp_sync -> rey_loader).
+success/failure rules change here (SGC_Rey_Loader_Workflow_Coordinator_Alignment
+retired the private ``run_steps`` engine; all loader workflows now run through the
+shared coordinator). FTP is NOT a loader concern: there is no sync/ftp step
+(``pipeline_coordinator`` sequences ftp_sync -> rey_loader).
 
 Apply semantics: dry-run is supported, but to preserve current loader behaviour
-the default is apply=True (legacy ``--stage load``/``all``/``sql`` apply
-directly). Database/file-mutating steps (load-files, sql-apply) are apply_only,
-so a dry-run skips them while transform still runs.
+the default is apply=True. Database/file-mutating steps (load_files, sql_apply)
+declare ``apply_only`` in workflow config, so a dry-run skips them while transform
+still runs.
 
 Public API
 ----------
-run_workflow    Execute a configured loader workflow via the shared engine.
-build_registry  The loader step registry (name -> StepSpec).
+build_process_registry  process name -> handler for the shared coordinator.
+run_process_workflow    Run one ordered workflow pass through the coordinator.
+run_file_workflow       Repeat single-file passes until discovery finds no file.
+needs_file_loop         True when a workflow discovers and processes files singly.
 """
 
 from __future__ import annotations
@@ -35,9 +40,6 @@ from rey_lib.logs import get_logger
 from rey_lib.workflow import (
     RunContext,
     StepResult,
-    StepSpec,
-    build_steps,
-    run_steps,
     run_workflow as coordinate_workflow,
 )
 
@@ -47,11 +49,10 @@ from rey_loader.sql_apply import run_sql_apply
 from rey_loader.transform import run_transform
 
 __all__ = [
-    "run_workflow",
-    "build_registry",
     "build_process_registry",
     "run_process_workflow",
     "run_file_workflow",
+    "needs_file_loop",
     "is_process_workflow",
 ]
 
@@ -62,115 +63,6 @@ CONTRACT = "SGC_Rey_Loader_Internal_Workflow_Refactor"
 # This app's identity. Workflow ownership is ``app + name``; rey_loader consumes
 # only workflows assigned to itself from the resolved ctx (never another app's).
 APP_NAME = "rey_loader"
-
-
-# ---------------------------------------------------------------------------
-# Step registry + handlers (RunContext-driven; each wraps an existing fn)
-# ---------------------------------------------------------------------------
-
-def build_registry() -> dict[str, StepSpec]:
-    """Return the loader step registry (name -> StepSpec).
-
-    load-files and sql-apply are ``apply_only`` (skipped in dry-run); the
-    engine runs them by default (apply=True) to preserve current semantics.
-    """
-    return {
-        "transform-files": StepSpec("transform-files", _step_transform),
-        "load-files":      StepSpec("load-files", _step_load, apply_only=True),
-        "validate-load":   StepSpec("validate-load", _step_validate),
-        "sql-apply":       StepSpec("sql-apply", _step_sql_apply, apply_only=True),
-    }
-
-
-def _step_transform(ctx: RunContext) -> StepResult:
-    """Transform local files. Calls the existing run_transform unchanged."""
-    count = run_transform(ctx.data["ctx"])
-    ctx.data["transformed_count"] = count
-    ctx.metadata["transformed_files"] = count
-    return StepResult("transform-files", "ok", f"{count} file(s)")
-
-
-def _step_load(ctx: RunContext) -> StepResult:
-    """Load converted files. Calls the existing run_load unchanged."""
-    rows = run_load(ctx.data["ctx"])
-    ctx.data["loaded_rows"] = rows
-    ctx.metadata["loaded_rows"] = rows
-    return StepResult("load-files", "ok", f"{rows} row(s)")
-
-
-def _step_validate(ctx: RunContext) -> StepResult:
-    """Record the load row count as the run's validation result.
-
-    Reporting/metadata only — it does not add new pass/fail rules, so existing
-    load semantics are unchanged. When load was skipped (dry-run) there is no
-    count to validate.
-    """
-    if "loaded_rows" not in ctx.data:
-        ctx.metadata["validation_result"] = "skipped (load not applied)"
-        return StepResult("validate-load", "skipped", "no load in this run")
-    rows = ctx.data["loaded_rows"]
-    ctx.metadata["validation_result"] = f"{rows} row(s) loaded"
-    return StepResult("validate-load", "ok", f"{rows} row(s)")
-
-
-def _step_sql_apply(ctx: RunContext) -> StepResult:
-    """Apply generated SQL files. Calls the existing run_sql_apply unchanged."""
-    source = str(ctx.data.get("source", "") or "")
-    run_sql_apply(ctx.data["ctx"], source)
-    return StepResult("sql-apply", "ok", f"source={source}")
-
-
-# ---------------------------------------------------------------------------
-# Runner (delegates orchestration to rey_lib.workflow)
-# ---------------------------------------------------------------------------
-
-def run_workflow(
-    ctx: Any,
-    workflow_name: str,
-    *,
-    source: str = "",
-    apply: bool = True,
-) -> int:
-    """Execute the named loader workflow via the shared engine.
-
-    Parameters
-    ----------
-    ctx : Any
-        Application context (must expose ``workflows`` with the named workflow).
-    workflow_name : str
-        Workflow name defined under ``workflows`` in rey_loader config.
-    source : str
-        sql_step name for the sql-apply step (workflows without it ignore it).
-    apply : bool
-        True (default) runs apply_only steps — preserving current loader
-        semantics; False is dry-run (load/sql-apply skipped).
-
-    Returns
-    -------
-    int
-        0 on success, 1 on failure.
-    """
-    wf = _get_workflow(ctx, workflow_name)
-    step_names = _as_list(_require(wf, "steps", workflow_name))
-
-    metadata: dict[str, Any] = {
-        "workflow": workflow_name,
-        "source": source,
-        "mode": "apply" if apply else "dry-run",
-        "contracts": [CONTRACT],
-    }
-    run_ctx = RunContext(apply=apply, metadata=metadata,
-                         data={"ctx": ctx, "source": source})
-
-    steps = build_steps(step_names, build_registry())
-    result = run_steps(steps, run_ctx, name=workflow_name)
-
-    if result.status != "success":
-        failed = result.results[-1].name if result.results else "?"
-        _logger.error("workflow '%s' failed at step: %s", workflow_name, failed)
-        return 1
-    _logger.info("workflow '%s' complete (%s).", workflow_name, metadata["mode"])
-    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -252,11 +144,14 @@ def _as_list(value: Any) -> list[Any]:
 # ===========================================================================
 
 def build_process_registry(adapter: Any) -> dict[str, Any]:
-    """Return the loader's generic workflow process registry (name -> handler).
+    """Return the loader's workflow process registry (name -> handler).
 
-    Exactly the four generic process groups loader workflows call; stored
-    procedures are routine bindings executed by the rey_lib DB utility layer,
-    never one Python function per routine.
+    Two families share one registry, dispatched by ``process`` name:
+    the per-file ingestion groups (file_operation / sql_operation / validate /
+    etl_operation) and the internal batch-ETL groups (transform_files /
+    load_files / validate_load / sql_apply). Stored procedures are routine
+    bindings executed by the rey_lib DB utility layer, never one Python function
+    per routine.
     """
     def file_operation(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
         return _process_file_operation(ctx, config, run)
@@ -270,12 +165,77 @@ def build_process_registry(adapter: Any) -> dict[str, Any]:
     def etl_operation(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
         return _process_etl_operation(ctx, config, run)
 
+    def transform_files(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        return _process_transform_files(ctx, config, run)
+
+    def load_files(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        return _process_load_files(ctx, config, run)
+
+    def validate_load(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        return _process_validate_load(ctx, config, run)
+
+    def sql_apply(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        return _process_sql_apply(ctx, config, run)
+
     return {
         "file_operation": file_operation,
         "sql_operation": sql_operation,
         "validate": validate,
         "etl_operation": etl_operation,
+        "transform_files": transform_files,
+        "load_files": load_files,
+        "validate_load": validate_load,
+        "sql_apply": sql_apply,
     }
+
+
+# ---------------------------------------------------------------------------
+# Internal batch-ETL process handlers (coordinator signature: ctx, config, run)
+#
+# These wrap the existing loader functions unchanged (run_transform / run_load /
+# run_sql_apply); business behaviour is preserved from the retired step engine.
+# Cross-step values live on ``run.data``; recorded values on ``run.metadata``.
+# ---------------------------------------------------------------------------
+
+def _process_transform_files(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+    """Transform local files. Calls the existing run_transform unchanged."""
+    count = run_transform(ctx)
+    run.data["transformed_count"] = count
+    run.metadata["transformed_files"] = count
+    return StepResult("transform_files", "ok", f"{count} file(s)")
+
+
+def _process_load_files(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+    """Load converted files. Calls the existing run_load unchanged."""
+    rows = run_load(ctx)
+    run.data["loaded_rows"] = rows
+    run.metadata["loaded_rows"] = rows
+    return StepResult("load_files", "ok", f"{rows} row(s)")
+
+
+def _process_validate_load(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+    """Record the load row count as the run's validation result (reporting only).
+
+    When load was skipped (dry-run) there is no count to validate, matching the
+    retired engine's behaviour exactly.
+    """
+    if "loaded_rows" not in run.data:
+        run.metadata["validation_result"] = "skipped (load not applied)"
+        return StepResult("validate_load", "skipped", "no load in this run")
+    rows = run.data["loaded_rows"]
+    run.metadata["validation_result"] = f"{rows} row(s) loaded"
+    return StepResult("validate_load", "ok", f"{rows} row(s)")
+
+
+def _process_sql_apply(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+    """Apply generated SQL files for the run's ``source`` sql_step.
+
+    ``source`` is loader-specific runtime input carried on the run metadata (seeded
+    by ``run_process_workflow``), never a shared-coordinator concept.
+    """
+    source = str(run.metadata.get("source", "") or "")
+    run_sql_apply(ctx, source)
+    return StepResult("sql_apply", "ok", f"source={source}")
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +249,27 @@ def is_process_workflow(ctx: Any, name: str) -> bool:
     except ReyLoaderError:
         return False
     return _get(wf, "processes") is not None
+
+
+def needs_file_loop(ctx: Any, name: str) -> bool:
+    """Return True when the workflow discovers and processes files one at a time.
+
+    A single-file workflow declares a ``discover_file`` file_operation step and
+    must run under ``run_file_workflow`` (the repeat-until-no-file loop). Batch
+    workflows (no discovery) run exactly one coordinator pass. Detection is by the
+    step's process/operation, never by name guessing.
+    """
+    try:
+        wf = _get_workflow(ctx, name)
+    except ReyLoaderError:
+        return False
+    for step in _as_list(_get(wf, "steps")):
+        if str(_get(step, "process", "")) != "file_operation":
+            continue
+        config = _get(step, "config")
+        if str(_get(config, "operation", "")) == "discover_file":
+            return True
+    return False
 
 
 def run_file_workflow(ctx: Any, adapter: Any, workflow_name: str, *,
@@ -320,19 +301,27 @@ def run_file_workflow(ctx: Any, adapter: Any, workflow_name: str, *,
 
 
 def run_process_workflow(ctx: Any, adapter: Any, workflow_name: str, *,
-                         apply: bool = True) -> int:
-    """Execute one single-file workflow pass through the shared coordinator.
+                         apply: bool = True, source: str = "") -> int:
+    """Execute one ordered workflow pass through the shared coordinator.
 
-    The shared coordinator runs exactly one ordered pass and is unchanged for
-    this use case (no file-list / loop / foreach). ``discover_file`` binds a
-    single ``ctx.current_file`` or sets ``ctx.no_file``; file-scoped steps
-    (``config.scope: file``) are skipped when no file was found, so a no-file
-    pass ends cleanly while batch start/end still run. Returns 0 / 1.
+    Used for both a single-file pass (via ``run_file_workflow``) and a batch
+    workflow run (once). The shared coordinator runs exactly one ordered pass.
+    For single-file workflows ``discover_file`` binds a single ``ctx.current_file``
+    or sets ``ctx.no_file``; file-scoped steps (``config.scope: file``) are skipped
+    when no file was found. ``source`` is loader-specific runtime input seeded into
+    the run metadata (the shared coordinator never learns loader concepts); the
+    ``sql_apply`` process reads it. Returns 0 / 1.
     """
     wf = _get_workflow(ctx, workflow_name)
     _require(wf, "steps", workflow_name)
+    metadata = {
+        "workflow": workflow_name,
+        "source": source,
+        "mode": "apply" if apply else "dry-run",
+        "contracts": [CONTRACT],
+    }
     registry = _guarded_registry(build_process_registry(adapter))
-    run = coordinate_workflow(ctx, wf, registry, apply=apply)
+    run = coordinate_workflow(ctx, wf, registry, apply=apply, metadata=metadata)
     if run.status != "success":
         failed = next((o for o in run.outcomes if o.status == "failed"), None)
         _logger.error("workflow '%s' failed at step: %s",

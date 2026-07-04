@@ -52,7 +52,10 @@ def _workflow(*steps, processes=None):
 
 def test_build_process_registry_exposes_generic_groups():
     registry = build_process_registry(object())
-    assert set(registry) == {"file_operation", "sql_operation", "validate", "etl_operation"}
+    assert set(registry) == {
+        "file_operation", "sql_operation", "validate", "etl_operation",
+        "transform_files", "load_files", "validate_load", "sql_apply",
+    }
 
 
 def test_is_process_workflow_detects_processes_block():
