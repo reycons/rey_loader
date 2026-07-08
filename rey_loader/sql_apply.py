@@ -20,12 +20,12 @@ provider-specific code lives here.
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 from rey_lib.config.config_utils import Namespace
 from rey_lib.db.db_adapter import DBAdapter
+from rey_lib.db.procedure_map import execute_sql_text
 from rey_lib.logs import get_logger
 
 from rey_loader.error_utils import ConfigError, DatabaseError
@@ -146,22 +146,32 @@ def _execute_files(
         for sql_file in files:
             sql_text = sql_file.read_text(encoding="utf-8")
             checksum = _checksum(sql_file)
-            start = datetime.now()
             _logger.info(
                 "sql apply start: run_id=%s pipeline=%s step=%s file=%s "
-                "checksum=%s connection=%s start=%s",
+                "checksum=%s connection=%s",
                 run_id, pipeline, step_name, sql_file.name, checksum,
-                conn_name, start.isoformat(),
+                conn_name,
             )
             try:
-                _db_adapter.run_sql(conn, sql_text)
+                execute_sql_text(
+                    ctx,
+                    conn,
+                    sql_text,
+                    sql_label=sql_file.name,
+                    operation="sql_apply",
+                    sql_path=str(sql_file),
+                    safe_to_preview=True,
+                    sql_step=source,
+                    connection_name=conn_name,
+                    checksum=checksum,
+                )
             except Exception as exc:  # noqa: BLE001 — logged and re-classified
                 failures += 1
                 _logger.error(
                     "sql apply FAILED: run_id=%s pipeline=%s step=%s file=%s "
-                    "connection=%s end=%s error=%s",
+                    "connection=%s error=%s",
                     run_id, pipeline, step_name, sql_file.name, conn_name,
-                    datetime.now().isoformat(), exc,
+                    exc,
                 )
                 if stop_on_error:
                     raise DatabaseError(
@@ -170,9 +180,8 @@ def _execute_files(
                 continue
             _logger.info(
                 "sql apply ok: run_id=%s pipeline=%s step=%s file=%s "
-                "connection=%s end=%s status=success",
+                "connection=%s status=success",
                 run_id, pipeline, step_name, sql_file.name, conn_name,
-                datetime.now().isoformat(),
             )
     finally:
         conn.close()
