@@ -18,9 +18,13 @@ def test_transform_command_runs_transform_without_workflow() -> None:
     log = Mock()
 
     with patch.object(loader_main, "run_transform", return_value=1) as transform, \
+         patch.object(loader_main, "run_app_operation",
+                      side_effect=lambda _ctx, _op, func: func()) as lifecycle, \
          patch.object(loader_main, "run_process_workflow") as workflow:
         assert loader_main._run_app_command(object(), args, True, log) == 0
 
+    lifecycle.assert_called_once()
+    assert lifecycle.call_args.args[1] == "transform"
     transform.assert_called_once()
     workflow.assert_not_called()
 
@@ -31,9 +35,13 @@ def test_sql_command_runs_sql_without_workflow() -> None:
     log = Mock()
 
     with patch.object(loader_main, "run_sql_apply") as sql_apply, \
+         patch.object(loader_main, "run_app_operation",
+                      side_effect=lambda _ctx, _op, func: func()) as lifecycle, \
          patch.object(loader_main, "run_process_workflow") as workflow:
         assert loader_main._run_app_command(ctx, args, True, log) == 0
 
+    lifecycle.assert_called_once()
+    assert lifecycle.call_args.args[1] == "sql"
     sql_apply.assert_called_once_with(ctx, "apply_sql")
     workflow.assert_not_called()
 

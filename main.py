@@ -27,7 +27,7 @@ preparse_config_args()
 
 from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_from_args
 from rey_lib.errors.error_utils import AppError, handle_exception
-from rey_lib.logs import get_logger, setup_logging
+from rey_lib.logs import get_logger, run_app_operation, setup_logging
 
 from rey_lib.db.db_adapter import DBAdapter
 
@@ -111,6 +111,20 @@ def _run_app_command(
     log: object,
 ) -> int:
     """Run a public rey_loader command without workflow-name translation."""
+    return run_app_operation(
+        ctx,
+        str(args.command),
+        lambda: _execute_app_command(ctx, args, apply, log),
+    )
+
+
+def _execute_app_command(
+    ctx: object,
+    args: argparse.Namespace,
+    apply: bool,
+    log: object,
+) -> int:
+    """Execute a public rey_loader command body."""
     if args.command == "transform":
         run_transform(ctx)
         return 0
