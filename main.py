@@ -27,7 +27,8 @@ preparse_config_args()
 
 from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_from_args
 from rey_lib.errors.error_utils import AppError, handle_exception
-from rey_lib.logs import get_logger, run_app_operation, setup_logging
+from rey_lib.logs import get_logger, setup_logging
+from rey_lib.run_lifecycle import run_app_operation
 
 from rey_lib.db.db_adapter import DBAdapter
 
