@@ -13,16 +13,39 @@ from rey_loader import sql_apply
 from rey_loader.error_utils import DatabaseError
 
 
+class _FakeCursor:
+    # psycopg2-shaped cursor: SQL execution goes through cursor.execute(), never
+    # through the connection object (which has no .execute()).
+    def __init__(self, conn: "_FakeConnection") -> None:
+        self._conn = conn
+        self.rowcount = 1
+
+    def execute(self, sql_text: str, _params: object = None) -> None:
+        self._conn.executed.append(sql_text)
+        if self._conn.fail:
+            raise RuntimeError("sql failed password=hunter2")
+
+
 class _FakeConnection:
+    # provider attribute lets DBAdapter route this connection to postgres_utils,
+    # matching how get_connection() tags real connections.
+    provider = "postgres"
+
     def __init__(self, *, fail: bool = False) -> None:
         self.executed: list[str] = []
         self.closed = False
         self.fail = fail
+        self.committed = 0
+        self.rolled_back = 0
 
-    def execute(self, sql_text: str) -> None:
-        self.executed.append(sql_text)
-        if self.fail:
-            raise RuntimeError("sql failed password=hunter2")
+    def cursor(self) -> "_FakeCursor":
+        return _FakeCursor(self)
+
+    def commit(self) -> None:
+        self.committed += 1
+
+    def rollback(self) -> None:
+        self.rolled_back += 1
 
     def close(self) -> None:
         self.closed = True
