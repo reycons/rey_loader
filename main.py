@@ -29,6 +29,7 @@ from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_f
 from rey_lib.errors.error_utils import AppError, handle_exception
 from rey_lib.logs import get_logger, setup_logging
 from rey_lib.run_lifecycle import run_app_operation
+from rey_lib.logs import create_results_summary
 
 from rey_lib.db.db_adapter import DBAdapter
 
@@ -91,6 +92,14 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001  — top-level safety net only
         handle_exception(log, exc, "Unexpected error in rey_loader")
         sys.exit(2)
+
+    finally:
+        # Top-level owner (standalone run, not a pipeline step) explicitly creates the
+        # RESULTS_SUMMARY after its final RUN_COMPLETE — on success or failure. Pipeline
+        # steps (invoked with --ctx-file) leave finalization to pipeline_coordinator
+        # (SGC_Rey_Lib_Explicit_Results_Summary_Creation).
+        if not getattr(args, "ctx_file", None):
+            create_results_summary(ctx)
 
 
 def _run_workflow_command(ctx: object, args: argparse.Namespace, apply: bool) -> int:
