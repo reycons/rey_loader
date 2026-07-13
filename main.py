@@ -27,7 +27,7 @@ preparse_config_args()
 
 from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_from_args
 from rey_lib.errors.error_utils import AppError, handle_exception
-from rey_lib.logs import get_logger, setup_logging
+from rey_lib.logs import get_logger, log_artifact_manifest_from_run_log, setup_logging
 from rey_lib.run_lifecycle import run_app_operation
 from rey_lib.logs import create_results_summary
 
@@ -99,7 +99,10 @@ def main() -> None:
         # steps (invoked with --ctx-file) leave finalization to pipeline_coordinator
         # (SGC_Rey_Lib_Explicit_Results_Summary_Creation).
         if not getattr(args, "ctx_file", None):
-            create_results_summary(ctx)
+            try:
+                create_results_summary(ctx)
+            finally:
+                log_artifact_manifest_from_run_log(ctx)
 
 
 def _run_workflow_command(ctx: object, args: argparse.Namespace, apply: bool) -> int:
