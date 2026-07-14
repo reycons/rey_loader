@@ -29,7 +29,7 @@ from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_f
 from rey_lib.errors.error_utils import AppError, handle_exception
 from rey_lib.logs import get_logger, log_artifact_manifest_from_run_log, setup_logging
 from rey_lib.run_lifecycle import run_app_operation
-from rey_lib.logs import create_results_summary
+from rey_lib.logs import finalize_run_log
 
 from rey_lib.db.db_adapter import DBAdapter
 
@@ -100,7 +100,7 @@ def main() -> None:
         # (SGC_Rey_Lib_Explicit_Results_Summary_Creation).
         if not getattr(args, "ctx_file", None):
             try:
-                create_results_summary(ctx)
+                finalize_run_log(ctx.run_log_path)
             finally:
                 log_artifact_manifest_from_run_log(ctx)
 
