@@ -19,10 +19,10 @@ provider-specific code lives here.
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import Any, Optional
 
+from rey_lib.encryption import sha256_file
 from rey_lib.config.config_utils import Namespace
 from rey_lib.db.db_adapter import DBAdapter
 from rey_lib.db.procedure_map import execute_sql_text
@@ -273,4 +273,4 @@ def _checksum(sql_file: Path) -> str:
     str
         SHA-256 hex digest used for execution audit logging.
     """
-    return hashlib.sha256(sql_file.read_bytes()).hexdigest()
+    return sha256_file(sql_file)
