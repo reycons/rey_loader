@@ -8,29 +8,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from rey_lib.db._sqlalchemy import ReyConnection
 from rey_lib.run_lifecycle import run_app_operation
 from rey_loader import sql_apply
 from rey_loader.error_utils import DatabaseError
 
 
-class _FakeCursor:
-    # psycopg2-shaped cursor: SQL execution goes through cursor.execute(), never
-    # through the connection object (which has no .execute()).
-    def __init__(self, conn: "_FakeConnection") -> None:
-        self._conn = conn
-        self.rowcount = 1
-
-    def execute(self, sql_text: str, _params: object = None) -> None:
-        self._conn.executed.append(sql_text)
-        if self._conn.fail:
-            raise RuntimeError("sql failed password=hunter2")
+class _FakeResult:
+    rowcount = 1
 
 
-class _FakeConnection:
-    # provider attribute lets DBAdapter route this connection to postgres_utils,
-    # matching how get_connection() tags real connections.
-    provider = "postgres"
-
+class _FakeCoreConnection:
     def __init__(self, *, fail: bool = False) -> None:
         self.executed: list[str] = []
         self.closed = False
@@ -38,8 +26,11 @@ class _FakeConnection:
         self.committed = 0
         self.rolled_back = 0
 
-    def cursor(self) -> "_FakeCursor":
-        return _FakeCursor(self)
+    def exec_driver_sql(self, sql_text: str, _params: object = None) -> _FakeResult:
+        self.executed.append(sql_text)
+        if self.fail:
+            raise RuntimeError("sql failed password=hunter2")
+        return _FakeResult()
 
     def commit(self) -> None:
         self.committed += 1
@@ -49,6 +40,33 @@ class _FakeConnection:
 
     def close(self) -> None:
         self.closed = True
+
+
+class _FakeEngine:
+    def dispose(self) -> None:
+        pass
+
+
+class _FakeConnection(ReyConnection):
+    def __init__(self, *, fail: bool = False) -> None:
+        self.core = _FakeCoreConnection(fail=fail)
+        super().__init__("postgres", _FakeEngine(), self.core)
+
+    @property
+    def executed(self) -> list[str]:
+        return self.core.executed
+
+    @property
+    def closed(self) -> bool:
+        return self.core.closed
+
+    @property
+    def committed(self) -> int:
+        return self.core.committed
+
+    @property
+    def rolled_back(self) -> int:
+        return self.core.rolled_back
 
 
 class _FakeAdapter:
