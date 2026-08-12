@@ -25,9 +25,10 @@ from pathlib import Path
 from rey_lib.config.cli import preparse_config_args
 preparse_config_args()
 
+from rey_lib.config.bootstrap import build_ctx_for_app
 from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_from_args
 from rey_lib.errors.error_utils import AppError, handle_exception
-from rey_lib.logs import get_logger, setup_logging
+from rey_lib.logs import get_logger
 from rey_lib.run_lifecycle import run_app_operation
 from rey_lib.logs import finalize_run_log
 
@@ -70,8 +71,9 @@ def main() -> None:
     operation = str(args.command)
     apply = not args.dry_run
 
-    # setup_logging is called once here — step modules must not call it again.
-    setup_logging(ctx, operation=operation)
+    # The shared bootstrap owns logging startup — step modules must not
+    # start it again.
+    build_ctx_for_app(ctx=ctx, operation=operation)
     log = get_logger(__name__)
     log.info("rey_loader starting — command=%s (mode=%s)",
              operation, "apply" if apply else "dry-run")
