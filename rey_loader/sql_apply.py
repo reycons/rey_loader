@@ -139,7 +139,7 @@ def _execute_files(
     """
     conn_name = str(getattr(step, "connection", "") or "")
     db_cfg = _find_connection(ctx, conn_name, source)
-    conn = _db_adapter.get_connection(db_cfg)
+    conn = _db_adapter.get_connection(db_cfg, ctx=ctx)
 
     failures = 0
     try:

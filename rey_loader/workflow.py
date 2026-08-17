@@ -370,7 +370,7 @@ def _process_sql_operation(ctx: Any, config: dict[str, Any], run: RunContext,
     if params is None:
         params = _get(config, "values")
     values = dict(_plain_dict(params))
-    conn = adapter.get_connection(get_connection_config(ctx, str(procedure_map)))
+    conn = adapter.get_connection(get_connection_config(ctx, str(procedure_map)), ctx=ctx)
     try:
         execute_mapped_routine(ctx, conn, str(procedure_map), str(routine),
                                values, run_ctx=ctx)

@@ -73,12 +73,12 @@ class _FakeAdapter:
     def __init__(self, conn: _FakeConnection) -> None:
         self.conn = conn
 
-    def get_connection(self, _db_cfg: object) -> _FakeConnection:
+    def get_connection(self, _db_cfg: object, *, ctx: object = None) -> _FakeConnection:
         return self.conn
 
 
 class _FailingAdapter:
-    def get_connection(self, _db_cfg: object) -> _FakeConnection:
+    def get_connection(self, _db_cfg: object, *, ctx: object = None) -> _FakeConnection:
         raise RuntimeError("connection failed password=hunter2")
 
 
