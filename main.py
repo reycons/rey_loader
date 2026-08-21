@@ -25,7 +25,7 @@ from pathlib import Path
 from rey_lib.config.cli import preparse_config_args
 preparse_config_args()
 
-from rey_lib.config.bootstrap import build_ctx_for_app
+from rey_lib.config.bootstrap import app_runtime
 from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_from_args
 from rey_lib.errors.error_utils import AppError, handle_exception
 from rey_lib.logs import get_logger
@@ -72,36 +72,39 @@ def main() -> None:
     apply = not args.dry_run
 
     # The shared bootstrap owns logging startup — step modules must not
-    # start it again.
-    build_ctx_for_app(ctx=ctx, operation=operation)
-    log = get_logger(__name__)
-    log.info("rey_loader starting — command=%s (mode=%s)",
-             operation, "apply" if apply else "dry-run")
+    # start it again. app_runtime is the process boundary: it composes the
+    # context and, when this block exits, collects the shared runtime objects
+    # it created. It encloses the finally below so the run log is finalized
+    # while those objects are still live, and collection happens after.
+    with app_runtime(ctx=ctx, operation=operation) as ctx:
+        log = get_logger(__name__)
+        log.info("rey_loader starting — command=%s (mode=%s)",
+                 operation, "apply" if apply else "dry-run")
 
-    try:
-        if args.command == "run-workflow":
-            code = _run_workflow_command(ctx, args, apply)
-        else:
-            code = _run_app_command(ctx, args, apply, log)
+        try:
+            if args.command == "run-workflow":
+                code = _run_workflow_command(ctx, args, apply)
+            else:
+                code = _run_app_command(ctx, args, apply, log)
 
-        log.info("rey_loader complete.")
-        sys.exit(code)
+            log.info("rey_loader complete.")
+            sys.exit(code)
 
-    except AppError as exc:
-        handle_exception(log, exc, "rey_loader pipeline error")
-        sys.exit(1)
+        except AppError as exc:
+            handle_exception(log, exc, "rey_loader pipeline error")
+            sys.exit(1)
 
-    except Exception as exc:  # noqa: BLE001  — top-level safety net only
-        handle_exception(log, exc, "Unexpected error in rey_loader")
-        sys.exit(2)
+        except Exception as exc:  # noqa: BLE001  — top-level safety net only
+            handle_exception(log, exc, "Unexpected error in rey_loader")
+            sys.exit(2)
 
-    finally:
-        # Top-level owner (standalone run, not a pipeline step) explicitly creates the
-        # RESULTS_SUMMARY after its final RUN_COMPLETE — on success or failure. Pipeline
-        # steps (invoked with --ctx-file) leave finalization to pipeline_coordinator
-        # (SGC_Rey_Lib_Explicit_Results_Summary_Creation).
-        if not getattr(args, "ctx_file", None):
-            finalize_run_log(ctx.run_log_path)
+        finally:
+            # Top-level owner (standalone run, not a pipeline step) explicitly creates
+            # the RESULTS_SUMMARY after its final RUN_COMPLETE — on success or failure.
+            # Pipeline steps (invoked with --ctx-file) leave finalization to
+            # pipeline_coordinator (SGC_Rey_Lib_Explicit_Results_Summary_Creation).
+            if not getattr(args, "ctx_file", None):
+                finalize_run_log(ctx.run_log_path)
 
 
 def _run_workflow_command(ctx: object, args: argparse.Namespace, apply: bool) -> int:
