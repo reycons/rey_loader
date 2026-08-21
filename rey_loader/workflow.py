@@ -33,7 +33,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from rey_lib.db.procedure_map import execute_mapped_routine, get_connection_config
+from rey_lib.db.procedure_map import execute_mapped_routine, resolve_connection_config
 from rey_lib.files.file_loader import load_one, transform_one, validate_one
 from rey_lib.files.file_utils import delete_file, move_file, visible_files
 from rey_lib.logs import get_logger
@@ -366,11 +366,18 @@ def _process_sql_operation(ctx: Any, config: dict[str, Any], run: RunContext,
     if not routine:
         raise ReyLoaderError("sql_operation: missing 'routine_binding'.")
 
+    # The step says which database the routine runs on. A procedure map is a
+    # routine contract and no longer answers that: binding one to a connection
+    # meant the same bindings could not be run against a second database.
+    connection = _get(config, "connection")
+    if not connection:
+        raise ReyLoaderError("sql_operation: missing 'connection'.")
+
     params = _get(config, "params")
     if params is None:
         params = _get(config, "values")
     values = dict(_plain_dict(params))
-    conn = adapter.get_connection(get_connection_config(ctx, str(procedure_map)), ctx=ctx)
+    conn = adapter.get_connection(resolve_connection_config(ctx, str(connection)), ctx=ctx)
     try:
         execute_mapped_routine(ctx, conn, str(procedure_map), str(routine),
                                values, run_ctx=ctx)

@@ -153,15 +153,37 @@ def test_no_file_skips_file_scoped_steps():
 def test_sql_operation_delegates_to_db_utils():
     ctx = _NS()
     config = {"operation": "execute_parameter_result", "procedure_map": "control",
-              "routine_binding": "start_batch", "params": {"batch_name": "B"}}
+              "connection": "control", "routine_binding": "start_batch",
+              "params": {"batch_name": "B"}}
     adapter = MagicMock()
-    with patch("rey_loader.workflow.get_connection_config", return_value="conn_cfg"), \
+    with patch("rey_loader.workflow.resolve_connection_config", return_value="conn_cfg"), \
          patch("rey_loader.workflow.execute_mapped_routine") as emr:
         result = _process_sql_operation(ctx, config, RunContext(), adapter)
     args, kwargs = emr.call_args
     assert args[2] == "control" and args[3] == "start_batch"
     assert kwargs.get("run_ctx") is ctx
     assert result.status == "ok"
+
+
+def test_sql_operation_resolves_the_connection_the_step_names():
+    """The step chooses the database; the procedure map is a routine contract."""
+    ctx = _NS()
+    config = {"operation": "execute_parameter_result", "procedure_map": "control",
+              "connection": "control_test", "routine_binding": "start_batch"}
+    adapter = MagicMock()
+    with patch("rey_loader.workflow.resolve_connection_config") as rcc, \
+         patch("rey_loader.workflow.execute_mapped_routine"):
+        _process_sql_operation(ctx, config, RunContext(), adapter)
+    # Resolved by the name the step gave, not by the map's name.
+    assert rcc.call_args[0][1] == "control_test"
+
+
+def test_sql_operation_without_a_connection_fails_closed():
+    """A map no longer answers which database, so the step must say."""
+    config = {"operation": "execute_parameter_result", "procedure_map": "control",
+              "routine_binding": "start_batch"}
+    with pytest.raises(ReyLoaderError, match="missing 'connection'"):
+        _process_sql_operation(_NS(), config, RunContext(), MagicMock())
 
 
 def test_sql_operation_unsupported_operation_fails_closed():
