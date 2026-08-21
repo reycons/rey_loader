@@ -33,7 +33,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from rey_lib.db.procedure_map import execute_mapped_routine, resolve_connection_config
+from rey_lib.db.connection import shared_connection
+from rey_lib.db.procedure_map import execute_mapped_routine
 from rey_lib.files.file_loader import load_one, transform_one, validate_one
 from rey_lib.files.file_utils import delete_file, move_file, visible_files
 from rey_lib.logs import get_logger
@@ -377,12 +378,10 @@ def _process_sql_operation(ctx: Any, config: dict[str, Any], run: RunContext,
     if params is None:
         params = _get(config, "values")
     values = dict(_plain_dict(params))
-    conn = adapter.get_connection(resolve_connection_config(ctx, str(connection)), ctx=ctx)
-    try:
-        execute_mapped_routine(ctx, conn, str(procedure_map), str(routine),
-                               values, run_ctx=ctx)
-    finally:
-        _close_quietly(conn)
+    conn = shared_connection(ctx, str(connection)).handle()
+    # Not closed: shared, and held by every other consumer of this name.
+    execute_mapped_routine(ctx, conn, str(procedure_map), str(routine),
+                           values, run_ctx=ctx)
     return StepResult(f"sql:{routine}", "ok", str(routine))
 
 
@@ -553,11 +552,3 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
     return getattr(obj, key, default)
 
 
-def _close_quietly(conn: Any) -> None:
-    """Close a DB connection, ignoring any close-time error."""
-    if conn is None:
-        return
-    try:
-        conn.close()
-    except Exception:  # noqa: BLE001 — close failures must not mask the result
-        pass

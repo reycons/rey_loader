@@ -156,8 +156,9 @@ def test_sql_operation_delegates_to_db_utils():
               "connection": "control", "routine_binding": "start_batch",
               "params": {"batch_name": "B"}}
     adapter = MagicMock()
-    with patch("rey_loader.workflow.resolve_connection_config", return_value="conn_cfg"), \
+    with patch("rey_loader.workflow.shared_connection") as shared, \
          patch("rey_loader.workflow.execute_mapped_routine") as emr:
+        shared.return_value.handle.return_value = "conn"
         result = _process_sql_operation(ctx, config, RunContext(), adapter)
     args, kwargs = emr.call_args
     assert args[2] == "control" and args[3] == "start_batch"
@@ -171,11 +172,12 @@ def test_sql_operation_resolves_the_connection_the_step_names():
     config = {"operation": "execute_parameter_result", "procedure_map": "control",
               "connection": "control_test", "routine_binding": "start_batch"}
     adapter = MagicMock()
-    with patch("rey_loader.workflow.resolve_connection_config") as rcc, \
+    with patch("rey_loader.workflow.shared_connection") as shared, \
          patch("rey_loader.workflow.execute_mapped_routine"):
         _process_sql_operation(ctx, config, RunContext(), adapter)
-    # Resolved by the name the step gave, not by the map's name.
-    assert rcc.call_args[0][1] == "control_test"
+    # Taken by the name the step gave, not by the map's name. It is the shared
+    # object, so the step opens nothing of its own.
+    assert shared.call_args[0][1] == "control_test"
 
 
 def test_sql_operation_without_a_connection_fails_closed():
