@@ -329,3 +329,37 @@ def write_advantage_csv(directory: Path, filename: str, rows: list[str] | None =
     lines = [ADVANTAGE_HEADER] + rows
     file_path.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
     return file_path
+
+
+# ---------------------------------------------------------------------------
+# Run logging
+# ---------------------------------------------------------------------------
+
+def make_run_log(
+    tmp_path,
+    *,
+    app: str = "rey_loader",
+    run_id: str = "00000000-0000-4000-8000-000000000001",
+    run_timestamp: str = "20260822_000000",
+    path: str | None = None,
+):
+    """Build a RunLog writing into ``tmp_path``.
+
+    Run logging is owned by ``RunLog``; a test that writes records takes one
+    rather than handing logging a context to read fields off.
+    """
+    from rey_lib.logs.run_log import RunLog
+
+    return RunLog(
+        app=app,
+        run_id=run_id,
+        run_timestamp=run_timestamp,
+        log_dir=None if path else str(tmp_path),
+        path=path,
+    )
+
+
+@pytest.fixture()
+def run_log(tmp_path):
+    """The run log a test writes records through."""
+    return make_run_log(tmp_path)

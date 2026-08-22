@@ -154,29 +154,29 @@ def build_process_registry(adapter: Any) -> dict[str, Any]:
     bindings executed by the rey_lib DB utility layer, never one Python function
     per routine.
     """
-    def file_operation(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
-        return _process_file_operation(ctx, config, run)
+    def file_operation(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        return _process_file_operation(ctx, run_log, config, run)
 
-    def sql_operation(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
-        return _process_sql_operation(ctx, config, run, adapter)
+    def sql_operation(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        return _process_sql_operation(ctx, run_log, config, run, adapter)
 
-    def validate(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
-        return _process_validate(ctx, config, run)
+    def validate(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        return _process_validate(ctx, run_log, config, run)
 
-    def etl_operation(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
-        return _process_etl_operation(ctx, config, run)
+    def etl_operation(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        return _process_etl_operation(ctx, run_log, config, run)
 
-    def transform_files(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
-        return _process_transform_files(ctx, config, run)
+    def transform_files(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        return _process_transform_files(ctx, run_log, config, run)
 
-    def load_files(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
-        return _process_load_files(ctx, config, run)
+    def load_files(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        return _process_load_files(ctx, run_log, config, run)
 
-    def validate_load(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
-        return _process_validate_load(ctx, config, run)
+    def validate_load(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        return _process_validate_load(ctx, run_log, config, run)
 
-    def sql_apply(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
-        return _process_sql_apply(ctx, config, run)
+    def sql_apply(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        return _process_sql_apply(ctx, run_log, config, run)
 
     return {
         "file_operation": file_operation,
@@ -198,15 +198,15 @@ def build_process_registry(adapter: Any) -> dict[str, Any]:
 # Cross-step values live on ``run.data``; recorded values on ``run.metadata``.
 # ---------------------------------------------------------------------------
 
-def _process_transform_files(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+def _process_transform_files(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
     """Transform local files. Calls the existing run_transform unchanged."""
-    count = run_transform(ctx)
+    count = run_transform(ctx, run_log)
     run.data["transformed_count"] = count
     run.metadata["transformed_files"] = count
     return StepResult("transform_files", "ok", f"{count} file(s)")
 
 
-def _process_load_files(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+def _process_load_files(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
     """Load converted files. Calls the existing run_load unchanged."""
     rows = run_load(ctx)
     run.data["loaded_rows"] = rows
@@ -214,7 +214,7 @@ def _process_load_files(ctx: Any, config: dict[str, Any], run: RunContext) -> St
     return StepResult("load_files", "ok", f"{rows} row(s)")
 
 
-def _process_validate_load(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+def _process_validate_load(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
     """Record the load row count as the run's validation result (reporting only).
 
     When load was skipped (dry-run) there is no count to validate, matching the
@@ -228,14 +228,14 @@ def _process_validate_load(ctx: Any, config: dict[str, Any], run: RunContext) ->
     return StepResult("validate_load", "ok", f"{rows} row(s)")
 
 
-def _process_sql_apply(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+def _process_sql_apply(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
     """Apply generated SQL files for the run's ``source`` sql_step.
 
     ``source`` is loader-specific runtime input carried on the run metadata (seeded
     by ``run_process_workflow``), never a shared-coordinator concept.
     """
     source = str(run.metadata.get("source", "") or "")
-    run_sql_apply(ctx, source)
+    run_sql_apply(ctx, run_log, source)
     return StepResult("sql_apply", "ok", f"source={source}")
 
 
@@ -273,7 +273,7 @@ def needs_file_loop(ctx: Any, name: str) -> bool:
     return False
 
 
-def run_file_workflow(ctx: Any, adapter: Any, workflow_name: str, *,
+def run_file_workflow(ctx: Any, run_log: Any, adapter: Any, workflow_name: str, *,
                       apply: bool = True, max_files: int = 100000) -> int:
     """Repeatedly run a single-file workflow until discovery finds no file.
 
@@ -288,7 +288,7 @@ def run_file_workflow(ctx: Any, adapter: Any, workflow_name: str, *,
     while processed < max_files:
         object.__setattr__(ctx, "current_file", None)
         object.__setattr__(ctx, "no_file", False)
-        code = run_process_workflow(ctx, adapter, workflow_name, apply=apply)
+        code = run_process_workflow(ctx, run_log, adapter, workflow_name, apply=apply)
         if code != 0:
             return code
         if getattr(ctx, "no_file", False):
@@ -301,7 +301,7 @@ def run_file_workflow(ctx: Any, adapter: Any, workflow_name: str, *,
     return 0
 
 
-def run_process_workflow(ctx: Any, adapter: Any, workflow_name: str, *,
+def run_process_workflow(ctx: Any, run_log: Any, adapter: Any, workflow_name: str, *,
                          apply: bool = True, source: str = "") -> int:
     """Execute one ordered workflow pass through the shared coordinator.
 
@@ -322,7 +322,8 @@ def run_process_workflow(ctx: Any, adapter: Any, workflow_name: str, *,
         "contracts": [CONTRACT],
     }
     registry = _guarded_registry(build_process_registry(adapter))
-    run = coordinate_workflow(ctx, wf, registry, apply=apply, metadata=metadata)
+    run = coordinate_workflow(ctx, run_log, wf, registry, apply=apply,
+                              metadata=metadata)
     if run.status != "success":
         failed = next((o for o in run.outcomes if o.status == "failed"), None)
         _logger.error("workflow '%s' failed at step: %s",
@@ -336,10 +337,10 @@ def run_process_workflow(ctx: Any, adapter: Any, workflow_name: str, *,
 def _guarded_registry(registry: dict[str, Any]) -> dict[str, Any]:
     """Wrap handlers to skip ``config.scope: file`` steps when no file was found."""
     def guard(handler: Any) -> Any:
-        def wrapped(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+        def wrapped(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
             if getattr(ctx, "no_file", False) and str(_get(config, "scope", "")) == "file":
                 return StepResult("skipped", "skipped", "no file")
-            return handler(ctx, config, run)
+            return handler(ctx, run_log, config, run)
         return wrapped
     return {name: guard(handler) for name, handler in registry.items()}
 
@@ -348,7 +349,7 @@ def _guarded_registry(registry: dict[str, Any]) -> dict[str, Any]:
 # Process handlers
 # ---------------------------------------------------------------------------
 
-def _process_sql_operation(ctx: Any, config: dict[str, Any], run: RunContext,
+def _process_sql_operation(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext,
                            adapter: Any) -> StepResult:
     """Execute a control routine binding via the rey_lib DB utility layer.
 
@@ -380,12 +381,12 @@ def _process_sql_operation(ctx: Any, config: dict[str, Any], run: RunContext,
     values = dict(_plain_dict(params))
     conn = shared_connection(ctx, str(connection)).handle()
     # Not closed: shared, and held by every other consumer of this name.
-    execute_mapped_routine(ctx, conn, str(procedure_map), str(routine),
+    execute_mapped_routine(ctx, run_log, conn, str(procedure_map), str(routine),
                            values, run_ctx=ctx)
     return StepResult(f"sql:{routine}", "ok", str(routine))
 
 
-def _process_file_operation(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+def _process_file_operation(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
     """Discover, move, or delete files against the data source's declared paths."""
     operation = str(_get(config, "operation", ""))
     if operation == "discover_file":
@@ -432,7 +433,7 @@ def _process_file_operation(ctx: Any, config: dict[str, Any], run: RunContext) -
     raise ReyLoaderError(f"file_operation: unsupported operation '{operation}'.")
 
 
-def _process_validate(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+def _process_validate(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
     """Validate the current file per its data-source ``file_type`` (fail closed)."""
     operation = str(_get(config, "operation", ""))
     if operation != "validate_file":
@@ -455,7 +456,7 @@ def _process_validate(ctx: Any, config: dict[str, Any], run: RunContext) -> Step
     return StepResult("validate", "ok", file_type)
 
 
-def _process_etl_operation(ctx: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+def _process_etl_operation(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
     """Transform or load exactly the current file via the public per-file APIs.
 
     Delegates to ``rey_lib.files.file_loader.transform_one`` / ``load_one`` for
@@ -466,7 +467,7 @@ def _process_etl_operation(ctx: Any, config: dict[str, Any], run: RunContext) ->
     data_source = _data_source(ctx, config)
 
     if operation == "transform_file":
-        if not transform_one(ctx, data_source, current):
+        if not transform_one(ctx, run_log, data_source, current):
             raise ReyLoaderError(f"etl_operation: transform rejected file '{current.name}'.")
         return StepResult("etl:transform_file", "ok", current.name)
 

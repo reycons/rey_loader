@@ -76,16 +76,16 @@ def main() -> None:
     # context and, when this block exits, collects the shared runtime objects
     # it created. It encloses the finally below so the run log is finalized
     # while those objects are still live, and collection happens after.
-    with app_runtime(ctx=ctx, operation=operation) as ctx:
+    with app_runtime(ctx=ctx, operation=operation) as (ctx, run_log):
         log = get_logger(__name__)
         log.info("rey_loader starting — command=%s (mode=%s)",
                  operation, "apply" if apply else "dry-run")
 
         try:
             if args.command == "run-workflow":
-                code = _run_workflow_command(ctx, args, apply)
+                code = _run_workflow_command(ctx, run_log, args, apply)
             else:
-                code = _run_app_command(ctx, args, apply, log)
+                code = _run_app_command(ctx, run_log, args, apply, log)
 
             log.info("rey_loader complete.")
             sys.exit(code)
@@ -104,23 +104,23 @@ def main() -> None:
             # Pipeline steps (invoked with --ctx-file) leave finalization to
             # pipeline_coordinator (SGC_Rey_Lib_Explicit_Results_Summary_Creation).
             if not getattr(args, "ctx_file", None):
-                finalize_run_log(ctx.run_log_path)
+                finalize_run_log(run_log)
 
 
-def _run_workflow_command(ctx: object, args: argparse.Namespace, apply: bool) -> int:
+def _run_workflow_command(ctx: object, run_log, args: argparse.Namespace, apply: bool) -> int:
     """Run an explicitly named loader workflow."""
     if not args.workflow:
         raise ReyLoaderError("run-workflow requires --workflow <name>.")
 
     if needs_file_loop(ctx, args.workflow):
-        return run_file_workflow(ctx, DBAdapter(), args.workflow, apply=apply)
+        return run_file_workflow(ctx, run_log, DBAdapter(), args.workflow, apply=apply)
     return run_process_workflow(
-        ctx, DBAdapter(), args.workflow, apply=apply, source=args.source
+        ctx, run_log, DBAdapter(), args.workflow, apply=apply, source=args.source
     )
 
 
 def _run_app_command(
-    ctx: object,
+    ctx: object, run_log,
     args: argparse.Namespace,
     apply: bool,
     log: object,
@@ -128,13 +128,13 @@ def _run_app_command(
     """Run a public rey_loader command without workflow-name translation."""
     return run_app_operation(
         ctx,
-        str(args.command),
-        lambda: _execute_app_command(ctx, args, apply, log),
+        run_log, str(args.command),
+        lambda: _execute_app_command(ctx, run_log, args, apply, log),
     )
 
 
 def _execute_app_command(
-    ctx: object,
+    ctx: object, run_log,
     args: argparse.Namespace,
     apply: bool,
     log: object,
@@ -161,7 +161,7 @@ def _execute_app_command(
 
     if args.command == "sql":
         if apply:
-            run_sql_apply(ctx, args.source)
+            run_sql_apply(ctx, run_log, args.source)
         else:
             log.info("sql skipped (dry-run).")
         return 0

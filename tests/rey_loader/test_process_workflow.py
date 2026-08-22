@@ -58,7 +58,7 @@ def test_build_process_registry_exposes_generic_groups():
     }
 
 
-def test_is_process_workflow_detects_processes_block():
+def test_is_process_workflow_detects_processes_block(run_log):
     ctx = _NS(workflows=[_NS(name="w", app="rey_loader", processes=_NS(x=1))])
     assert is_process_workflow(ctx, "w") is True
     ctx2 = _NS(workflows=[_NS(name="s", app="rey_loader", steps=[])])
@@ -69,10 +69,10 @@ def test_is_process_workflow_detects_processes_block():
 # Single coordinator pass + rey_loader repeat loop
 # ---------------------------------------------------------------------------
 
-def test_run_process_workflow_is_a_single_ordered_pass():
+def test_run_process_workflow_is_a_single_ordered_pass(run_log):
     order: list = []
 
-    def handler(ctx, config, run):
+    def handler(ctx, run_log, config, run):
         order.append(config.get("marker"))
         return StepResult("x", "ok")
 
@@ -86,49 +86,49 @@ def test_run_process_workflow_is_a_single_ordered_pass():
     )
     ctx = _NS(workflows=[wf])
     with patch("rey_loader.workflow.build_process_registry", return_value=stub):
-        code = run_process_workflow(ctx, object(), "w", apply=True)
+        code = run_process_workflow(ctx, run_log, object(), "w", apply=True)
     assert code == 0
     assert order == ["s1", "s2", "s3"]
 
 
-def test_run_file_workflow_repeats_until_no_file():
+def test_run_file_workflow_repeats_until_no_file(run_log):
     calls = {"n": 0}
 
-    def fake_pass(ctx, adapter, name, *, apply=True):
+    def fake_pass(ctx, run_log, adapter, name, *, apply=True):
         calls["n"] += 1
         object.__setattr__(ctx, "no_file", calls["n"] >= 3)
         return 0
 
     ctx = _NS()
     with patch("rey_loader.workflow.run_process_workflow", side_effect=fake_pass):
-        code = run_file_workflow(ctx, object(), "w", apply=True)
+        code = run_file_workflow(ctx, run_log, object(), "w", apply=True)
     assert code == 0
     assert calls["n"] == 3  # two files processed, third pass finds no file
 
 
-def test_run_file_workflow_dry_run_is_single_pass():
+def test_run_file_workflow_dry_run_is_single_pass(run_log):
     calls = {"n": 0}
 
-    def fake_pass(ctx, adapter, name, *, apply=True):
+    def fake_pass(ctx, run_log, adapter, name, *, apply=True):
         calls["n"] += 1
         object.__setattr__(ctx, "no_file", False)  # a file is always available
         return 0
 
     ctx = _NS()
     with patch("rey_loader.workflow.run_process_workflow", side_effect=fake_pass):
-        run_file_workflow(ctx, object(), "w", apply=False)
+        run_file_workflow(ctx, run_log, object(), "w", apply=False)
     assert calls["n"] == 1  # dry-run does not consume files, so it runs once
 
 
-def test_no_file_skips_file_scoped_steps():
+def test_no_file_skips_file_scoped_steps(run_log):
     ran: list = []
 
-    def discover(ctx, config, run):
+    def discover(ctx, run_log, config, run):
         object.__setattr__(ctx, "no_file", True)
         ran.append("discover")
         return StepResult("d", "ok")
 
-    def handler(ctx, config, run):
+    def handler(ctx, run_log, config, run):
         ran.append(config.get("id"))
         return StepResult("x", "ok")
 
@@ -141,7 +141,7 @@ def test_no_file_skips_file_scoped_steps():
     )
     ctx = _NS(workflows=[wf], no_file=False)
     with patch("rey_loader.workflow.build_process_registry", return_value=stub):
-        run_process_workflow(ctx, object(), "w", apply=True)
+        run_process_workflow(ctx, run_log, object(), "w", apply=True)
     assert "discover" in ran and "batch_step" in ran  # batch-scoped steps run
     assert "file_step" not in ran                      # file-scoped step skipped
 
@@ -150,7 +150,7 @@ def test_no_file_skips_file_scoped_steps():
 # sql_operation delegates to the DB utility layer
 # ---------------------------------------------------------------------------
 
-def test_sql_operation_delegates_to_db_utils():
+def test_sql_operation_delegates_to_db_utils(run_log):
     ctx = _NS()
     config = {"operation": "execute_parameter_result", "procedure_map": "control",
               "connection": "control", "routine_binding": "start_batch",
@@ -159,14 +159,14 @@ def test_sql_operation_delegates_to_db_utils():
     with patch("rey_loader.workflow.shared_connection") as shared, \
          patch("rey_loader.workflow.execute_mapped_routine") as emr:
         shared.return_value.handle.return_value = "conn"
-        result = _process_sql_operation(ctx, config, RunContext(), adapter)
+        result = _process_sql_operation(ctx, run_log, config, RunContext(), adapter)
     args, kwargs = emr.call_args
-    assert args[2] == "control" and args[3] == "start_batch"
+    assert args[3] == "control" and args[4] == "start_batch"
     assert kwargs.get("run_ctx") is ctx
     assert result.status == "ok"
 
 
-def test_sql_operation_resolves_the_connection_the_step_names():
+def test_sql_operation_resolves_the_connection_the_step_names(run_log):
     """The step chooses the database; the procedure map is a routine contract."""
     ctx = _NS()
     config = {"operation": "execute_parameter_result", "procedure_map": "control",
@@ -174,30 +174,30 @@ def test_sql_operation_resolves_the_connection_the_step_names():
     adapter = MagicMock()
     with patch("rey_loader.workflow.shared_connection") as shared, \
          patch("rey_loader.workflow.execute_mapped_routine"):
-        _process_sql_operation(ctx, config, RunContext(), adapter)
+        _process_sql_operation(ctx, run_log, config, RunContext(), adapter)
     # Taken by the name the step gave, not by the map's name. It is the shared
     # object, so the step opens nothing of its own.
     assert shared.call_args[0][1] == "control_test"
 
 
-def test_sql_operation_without_a_connection_fails_closed():
+def test_sql_operation_without_a_connection_fails_closed(run_log):
     """A map no longer answers which database, so the step must say."""
     config = {"operation": "execute_parameter_result", "procedure_map": "control",
               "routine_binding": "start_batch"}
     with pytest.raises(ReyLoaderError, match="missing 'connection'"):
-        _process_sql_operation(_NS(), config, RunContext(), MagicMock())
+        _process_sql_operation(_NS(), run_log, config, RunContext(), MagicMock())
 
 
-def test_sql_operation_unsupported_operation_fails_closed():
+def test_sql_operation_unsupported_operation_fails_closed(run_log):
     with pytest.raises(ReyLoaderError, match="unsupported operation"):
-        _process_sql_operation(_NS(), {"operation": "nope"}, RunContext(), MagicMock())
+        _process_sql_operation(_NS(), run_log, {"operation": "nope"}, RunContext(), MagicMock())
 
 
 # ---------------------------------------------------------------------------
 # file_operation
 # ---------------------------------------------------------------------------
 
-def test_discover_file_binds_a_single_file(tmp_path):
+def test_discover_file_binds_a_single_file(run_log, tmp_path):
     (tmp_path / "tran_1.csv").write_text("x")
     (tmp_path / "tran_2.csv").write_text("y")
     ds = _NS(name="advantage", paths=_NS(inbox_path=str(tmp_path)))
@@ -205,38 +205,38 @@ def test_discover_file_binds_a_single_file(tmp_path):
     config = {"operation": "discover_file", "data_source": "advantage",
               "path": "inbox_path", "pattern": "tran_*.csv",
               "output": {"current_file": "current_file"}}
-    result = _process_file_operation(ctx, config, RunContext(metadata={}))
+    result = _process_file_operation(ctx, run_log, config, RunContext(metadata={}))
     assert result.status == "ok"
     assert Path(ctx.current_file).name == "tran_1.csv"   # single, first in order
     assert ctx.no_file is False
 
 
-def test_discover_file_no_file_sets_flag(tmp_path):
+def test_discover_file_no_file_sets_flag(run_log, tmp_path):
     ds = _NS(name="advantage", paths=_NS(inbox_path=str(tmp_path)))
     ctx = _NS(data_sources=[ds])
     config = {"operation": "discover_file", "data_source": "advantage",
               "path": "inbox_path", "pattern": "tran_*.csv",
               "output": {"current_file": "current_file"}}
-    result = _process_file_operation(ctx, config, RunContext(metadata={}))
+    result = _process_file_operation(ctx, run_log, config, RunContext(metadata={}))
     assert result.status == "ok" and result.detail == "no file"
     assert ctx.no_file is True and ctx.current_file is None
 
 
-def test_file_operation_move_uses_destination_key(tmp_path):
+def test_file_operation_move_uses_destination_key(run_log, tmp_path):
     ds = _NS(name="advantage", paths=_NS(processing_path=str(tmp_path / "proc")))
     ctx = _NS(data_sources=[ds], current_file=str(tmp_path / "f.csv"))
     config = {"operation": "move", "data_source": "advantage", "to": "processing_path"}
     with patch("rey_loader.workflow.move_file",
                return_value=tmp_path / "proc" / "f.csv") as mv:
-        result = _process_file_operation(ctx, config, RunContext())
+        result = _process_file_operation(ctx, run_log, config, RunContext())
     mv.assert_called_once()
     assert result.status == "ok" and ctx.current_file.endswith("proc/f.csv")
 
 
-def test_file_operation_delete_refuses_missing_current_file():
+def test_file_operation_delete_refuses_missing_current_file(run_log):
     ctx = _NS(data_sources=[])
     with pytest.raises(ReyLoaderError, match="no current file"):
-        _process_file_operation(ctx, {"operation": "delete", "data_source": "advantage"},
+        _process_file_operation(ctx, run_log, {"operation": "delete", "data_source": "advantage"},
                                 RunContext())
 
 
@@ -244,25 +244,25 @@ def test_file_operation_delete_refuses_missing_current_file():
 # validate
 # ---------------------------------------------------------------------------
 
-def test_validate_delimited_header_uses_header_validation(tmp_path):
+def test_validate_delimited_header_uses_header_validation(run_log, tmp_path):
     f = tmp_path / "f.csv"
     f.write_text("a,b,c\n1,2,3\n")
     ds = _NS(name="advantage", transforms=[_NS(file_type="delimited_header")])
     ctx = _NS(data_sources=[ds], current_file=str(f))
     with patch("rey_lib.files.file_loader._validate_header", return_value=True) as vh:
-        result = _process_validate(ctx, {"operation": "validate_file",
+        result = _process_validate(ctx, run_log, {"operation": "validate_file",
                                          "data_source": "advantage"}, RunContext(metadata={}))
     vh.assert_called_once()
     assert result.status == "ok" and ctx.validation_status == "ok"
 
 
-def test_validate_unsupported_file_type_fails_closed(tmp_path):
+def test_validate_unsupported_file_type_fails_closed(run_log, tmp_path):
     f = tmp_path / "f.csv"
     f.write_text("x")
     ds = _NS(name="advantage", transforms=[_NS(file_type="mystery")])
     ctx = _NS(data_sources=[ds], current_file=str(f))
     with pytest.raises(ReyLoaderError, match="unsupported file_type"):
-        _process_validate(ctx, {"operation": "validate_file", "data_source": "advantage"},
+        _process_validate(ctx, run_log, {"operation": "validate_file", "data_source": "advantage"},
                           RunContext(metadata={}))
 
 
@@ -270,49 +270,49 @@ def test_validate_unsupported_file_type_fails_closed(tmp_path):
 # etl_operation delegates to the public per-file APIs (never the batch runners)
 # ---------------------------------------------------------------------------
 
-def test_etl_transform_calls_transform_one_with_current_file():
+def test_etl_transform_calls_transform_one_with_current_file(run_log):
     ctx = _NS(current_file="/x/f.csv", data_sources=[_NS(name="advantage")])
     with patch("rey_loader.workflow.transform_one", return_value=True) as t1:
-        result = _process_etl_operation(ctx, {"operation": "transform_file",
+        result = _process_etl_operation(ctx, run_log, {"operation": "transform_file",
                                               "data_source": "advantage"},
                                         RunContext(metadata={}))
     args = t1.call_args[0]
-    assert str(args[2]).endswith("f.csv")   # the single current file
+    assert str(args[3]).endswith("f.csv")   # the single current file
     assert result.status == "ok"
 
 
-def test_etl_load_calls_load_one_with_current_file():
+def test_etl_load_calls_load_one_with_current_file(run_log):
     ds = _NS(name="advantage", loads=[_NS(name="ld")])
     ctx = _NS(current_file="/x/f.csv", data_sources=[ds])
     with patch("rey_loader.workflow.load_one", return_value=42) as l1:
-        result = _process_etl_operation(ctx, {"operation": "load_file",
+        result = _process_etl_operation(ctx, run_log, {"operation": "load_file",
                                               "data_source": "advantage"},
                                         RunContext(metadata={}))
     assert str(l1.call_args[0][3]).endswith("f.csv")
     assert result.status == "ok" and "42" in result.detail
 
 
-def test_etl_never_calls_the_batch_runners():
+def test_etl_never_calls_the_batch_runners(run_log):
     ctx = _NS(current_file="/x/f.csv", data_sources=[_NS(name="advantage")])
     with patch("rey_loader.workflow.transform_one", return_value=True), \
          patch("rey_lib.files.file_loader.run_transform",
                side_effect=AssertionError("batch runner must not be called")), \
          patch("rey_lib.files.file_loader.run_load",
                side_effect=AssertionError("batch runner must not be called")):
-        _process_etl_operation(ctx, {"operation": "transform_file",
+        _process_etl_operation(ctx, run_log, {"operation": "transform_file",
                                      "data_source": "advantage"}, RunContext(metadata={}))
 
 
-def test_etl_transform_rejected_fails_closed():
+def test_etl_transform_rejected_fails_closed(run_log):
     ctx = _NS(current_file="/x/f.csv", data_sources=[_NS(name="advantage")])
     with patch("rey_loader.workflow.transform_one", return_value=False):
         with pytest.raises(ReyLoaderError, match="rejected"):
-            _process_etl_operation(ctx, {"operation": "transform_file",
+            _process_etl_operation(ctx, run_log, {"operation": "transform_file",
                                          "data_source": "advantage"}, RunContext(metadata={}))
 
 
-def test_etl_unsupported_operation_fails_closed():
+def test_etl_unsupported_operation_fails_closed(run_log):
     ctx = _NS(current_file="/x/f.csv", data_sources=[_NS(name="advantage")])
     with pytest.raises(ReyLoaderError, match="unsupported operation"):
-        _process_etl_operation(ctx, {"operation": "nope", "data_source": "advantage"},
+        _process_etl_operation(ctx, run_log, {"operation": "nope", "data_source": "advantage"},
                                RunContext(metadata={}))

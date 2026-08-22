@@ -90,7 +90,7 @@ def _records(ctx: object) -> list[dict]:
     ]
 
 
-def test_sql_apply_emits_one_sql_execution_per_file(
+def test_sql_apply_emits_one_sql_execution_per_file(run_log, 
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -120,7 +120,7 @@ def test_sql_apply_emits_one_sql_execution_per_file(
         db_connections=[SimpleNamespace(name="warehouse")],
     )
 
-    sql_apply.run_sql_apply(ctx, "apply_sql")
+    sql_apply.run_sql_apply(ctx, run_log, "apply_sql")
 
     assert conn.executed == ["select 1", "select 2"]
     assert conn.closed is True
@@ -139,7 +139,7 @@ def test_sql_apply_emits_one_sql_execution_per_file(
     assert all(record["sql_step"] == "apply_sql" for record in records)
 
 
-def test_sql_apply_failure_records_canonical_error_evidence(
+def test_sql_apply_failure_records_canonical_error_evidence(run_log, 
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -167,7 +167,7 @@ def test_sql_apply_failure_records_canonical_error_evidence(
     )
 
     with pytest.raises(DatabaseError):
-        run_app_operation(ctx, "sql", lambda: sql_apply.run_sql_apply(ctx, "apply_sql"))
+        run_app_operation(ctx, run_log, "sql", lambda: sql_apply.run_sql_apply(ctx, run_log, "apply_sql"))
 
     records = _records(ctx)
     error = next(record for record in records if record["record_type"] == "ERROR")
@@ -181,7 +181,7 @@ def test_sql_apply_failure_records_canonical_error_evidence(
     assert sql_record["sql_label"] == "001_bad.sql"
 
 
-def test_sql_apply_connection_failure_records_canonical_error_evidence(
+def test_sql_apply_connection_failure_records_canonical_error_evidence(run_log, 
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -207,7 +207,7 @@ def test_sql_apply_connection_failure_records_canonical_error_evidence(
     )
 
     with pytest.raises(RuntimeError):
-        run_app_operation(ctx, "sql", lambda: sql_apply.run_sql_apply(ctx, "apply_sql"))
+        run_app_operation(ctx, run_log, "sql", lambda: sql_apply.run_sql_apply(ctx, run_log, "apply_sql"))
 
     records = _records(ctx)
     error = next(record for record in records if record["record_type"] == "ERROR")

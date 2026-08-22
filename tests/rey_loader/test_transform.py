@@ -49,55 +49,55 @@ class TestTransformFilesBasic:
     """Happy-path transform tests — valid file produces a converted output."""
 
     def test_single_valid_file_is_transformed(
-        self, ctx: Namespace, tmp_path: Path
+        self, run_log, ctx: Namespace, tmp_path: Path
     ) -> None:
         """A valid inbox file produces an output CSV in converted_path."""
         data_source = ctx.data_sources[0]
         write_advantage_csv(data_source.paths.inbox_path, "tran_20260501.csv")
 
-        count = transform_files(ctx, data_source, data_source.transforms)
+        count = transform_files(ctx, run_log, data_source, data_source.transforms)
 
         assert count == 1
         output_files = list(data_source.paths.converted_path.glob("tran_20260501_v01.csv"))
         assert len(output_files) == 1, "Expected one output file in converted_path"
 
     def test_source_file_moved_to_processing(
-        self, ctx: Namespace, tmp_path: Path
+        self, run_log, ctx: Namespace, tmp_path: Path
     ) -> None:
         """After a successful transform, the source file is in processing_path not inbox_path."""
         data_source = ctx.data_sources[0]
         write_advantage_csv(data_source.paths.inbox_path, "tran_20260501.csv")
 
-        transform_files(ctx, data_source, data_source.transforms)
+        transform_files(ctx, run_log, data_source, data_source.transforms)
 
         assert not (data_source.paths.inbox_path / "tran_20260501.csv").exists()
         assert (data_source.paths.processing_path / "tran_20260501.csv").exists()
 
     def test_multiple_files_all_transformed(
-        self, ctx: Namespace, tmp_path: Path
+        self, run_log, ctx: Namespace, tmp_path: Path
     ) -> None:
         """All pending inbox files are transformed in a single run."""
         data_source = ctx.data_sources[0]
         for name in ("tran_20260501.csv", "tran_20260502.csv", "tran_20260503.csv"):
             write_advantage_csv(data_source.paths.inbox_path, name)
 
-        count = transform_files(ctx, data_source, data_source.transforms)
+        count = transform_files(ctx, run_log, data_source, data_source.transforms)
 
         assert count == 3
 
     def test_empty_inbox_returns_zero(
-        self, ctx: Namespace, tmp_path: Path
+        self, run_log, ctx: Namespace, tmp_path: Path
     ) -> None:
         """No inbox files → count 0, no output produced."""
         data_source = ctx.data_sources[0]
 
-        count = transform_files(ctx, data_source, data_source.transforms)
+        count = transform_files(ctx, run_log, data_source, data_source.transforms)
 
         assert count == 0
         assert list(data_source.paths.converted_path.iterdir()) == []
 
     def test_max_files_per_run_respected(
-        self, ctx: Namespace, tmp_path: Path
+        self, run_log, ctx: Namespace, tmp_path: Path
     ) -> None:
         """max_files_per_run caps the number of files processed."""
         data_source = ctx.data_sources[0]
@@ -107,7 +107,7 @@ class TestTransformFilesBasic:
         for name in ("tran_20260501.csv", "tran_20260502.csv", "tran_20260503.csv"):
             write_advantage_csv(data_source.paths.inbox_path, name)
 
-        count = transform_files(ctx, data_source, data_source.transforms)
+        count = transform_files(ctx, run_log, data_source, data_source.transforms)
 
         assert count == 2
 
@@ -120,28 +120,28 @@ class TestTransformFilesRejection:
     """Files that fail header matching are sent to rejected_path."""
 
     def test_wrong_header_moves_to_rejected(
-        self, ctx: Namespace, tmp_path: Path
+        self, run_log, ctx: Namespace, tmp_path: Path
     ) -> None:
         """A file with a non-matching header is rejected, not transformed."""
         data_source = ctx.data_sources[0]
         bad_file = data_source.paths.inbox_path / "tran_20260501.csv"
         bad_file.write_text("WRONG,HEADER,COLS\n1,2,3\n", encoding="utf-8-sig")
 
-        count = transform_files(ctx, data_source, data_source.transforms)
+        count = transform_files(ctx, run_log, data_source, data_source.transforms)
 
         assert count == 0
         assert not bad_file.exists(), "Source should be gone from inbox"
         assert (data_source.paths.rejected_path / "tran_20260501.csv").exists()
 
     def test_wrong_header_produces_no_output(
-        self, ctx: Namespace, tmp_path: Path
+        self, run_log, ctx: Namespace, tmp_path: Path
     ) -> None:
         """A rejected file leaves converted_path empty."""
         data_source = ctx.data_sources[0]
         bad_file = data_source.paths.inbox_path / "tran_20260501.csv"
         bad_file.write_text("WRONG,HEADER,COLS\n1,2,3\n", encoding="utf-8-sig")
 
-        transform_files(ctx, data_source, data_source.transforms)
+        transform_files(ctx, run_log, data_source, data_source.transforms)
 
         assert list(data_source.paths.converted_path.iterdir()) == []
 
@@ -154,13 +154,13 @@ class TestTransformFilesConstants:
     """Constants declared in transform config appear in every output row."""
 
     def test_broker_constant_injected(
-        self, ctx: Namespace, tmp_path: Path
+        self, run_log, ctx: Namespace, tmp_path: Path
     ) -> None:
         """broker='advantage' is present in every output row."""
         data_source = ctx.data_sources[0]
         write_advantage_csv(data_source.paths.inbox_path, "tran_20260501.csv")
 
-        transform_files(ctx, data_source, data_source.transforms)
+        transform_files(ctx, run_log, data_source, data_source.transforms)
 
         rows = _read_output_rows(data_source.paths.converted_path, "tran_20260501_v01.csv")
         assert rows, "No rows in output"
@@ -168,26 +168,26 @@ class TestTransformFilesConstants:
             assert row.get("broker") == "advantage"
 
     def test_record_source_constant_injected(
-        self, ctx: Namespace, tmp_path: Path
+        self, run_log, ctx: Namespace, tmp_path: Path
     ) -> None:
         """record_source='CSV Import' is present in every output row."""
         data_source = ctx.data_sources[0]
         write_advantage_csv(data_source.paths.inbox_path, "tran_20260501.csv")
 
-        transform_files(ctx, data_source, data_source.transforms)
+        transform_files(ctx, run_log, data_source, data_source.transforms)
 
         rows = _read_output_rows(data_source.paths.converted_path, "tran_20260501_v01.csv")
         for row in rows:
             assert row.get("record_source") == "CSV Import"
 
     def test_source_file_token_resolved(
-        self, ctx: Namespace, tmp_path: Path
+        self, run_log, ctx: Namespace, tmp_path: Path
     ) -> None:
         """source_file constant resolves to the source file name (not a literal token)."""
         data_source = ctx.data_sources[0]
         write_advantage_csv(data_source.paths.inbox_path, "tran_20260501.csv")
 
-        transform_files(ctx, data_source, data_source.transforms)
+        transform_files(ctx, run_log, data_source, data_source.transforms)
 
         rows = _read_output_rows(data_source.paths.converted_path, "tran_20260501_v01.csv")
         for row in rows:
@@ -206,13 +206,13 @@ class TestTransformFilesDateParsing:
     """Inline date transforms convert raw values correctly."""
 
     def test_trade_date_yyyymmdd_parsed(
-        self, ctx: Namespace, tmp_path: Path
+        self, run_log, ctx: Namespace, tmp_path: Path
     ) -> None:
         """TRADE DATE 20260501 is written as an ISO date string."""
         data_source = ctx.data_sources[0]
         write_advantage_csv(data_source.paths.inbox_path, "tran_20260501.csv")
 
-        transform_files(ctx, data_source, data_source.transforms)
+        transform_files(ctx, run_log, data_source, data_source.transforms)
 
         rows = _read_output_rows(data_source.paths.converted_path, "tran_20260501_v01.csv")
         assert rows
@@ -222,14 +222,14 @@ class TestTransformFilesDateParsing:
         assert "2026" in trade_date, f"Expected parsed date, got: {trade_date!r}"
 
     def test_blank_prompt_date_allowed(
-        self, ctx: Namespace, tmp_path: Path
+        self, run_log, ctx: Namespace, tmp_path: Path
     ) -> None:
         """Blank PROMPT DATE does not cause a row error (allow_blank=True)."""
         data_source = ctx.data_sources[0]
         # ADVANTAGE_ROW_VALID has a blank PROMPT DATE — use it directly.
         write_advantage_csv(data_source.paths.inbox_path, "tran_20260501.csv")
 
-        count = transform_files(ctx, data_source, data_source.transforms)
+        count = transform_files(ctx, run_log, data_source, data_source.transforms)
 
         # File must not have been rejected.
         assert count == 1
@@ -244,21 +244,21 @@ class TestRunTransformOrchestration:
     """run_transform iterates all data sources and aggregates counts."""
 
     def test_run_transform_returns_total_count(
-        self, ctx: Namespace, tmp_path: Path
+        self, run_log, ctx: Namespace, tmp_path: Path
     ) -> None:
         """run_transform returns total files transformed across all sources."""
         data_source = ctx.data_sources[0]
         write_advantage_csv(data_source.paths.inbox_path, "tran_20260501.csv")
         write_advantage_csv(data_source.paths.inbox_path, "tran_20260502.csv")
 
-        total = run_transform(ctx)
+        total = run_transform(ctx, run_log)
 
         assert total == 2
 
     def test_run_transform_empty_inbox_returns_zero(
-        self, ctx: Namespace
+        self, run_log, ctx: Namespace
     ) -> None:
         """run_transform returns 0 when no files are pending."""
-        total = run_transform(ctx)
+        total = run_transform(ctx, run_log)
         assert total == 0
 

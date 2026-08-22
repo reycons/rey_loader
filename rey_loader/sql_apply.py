@@ -37,7 +37,7 @@ _logger = get_logger(__name__)
 _db_adapter = DBAdapter()
 
 
-def run_sql_apply(ctx: Namespace, source: str) -> None:
+def run_sql_apply(ctx: Namespace, run_log, source: str) -> None:
     """Execute the SQL files declared by the named ``sql_step``.
 
     Parameters
@@ -102,12 +102,12 @@ def run_sql_apply(ctx: Namespace, source: str) -> None:
             )
         return
 
-    _execute_files(ctx, step, source, files, stop_on_error,
+    _execute_files(ctx, run_log, step, source, files, stop_on_error,
                    run_id, pipeline, step_name)
 
 
 def _execute_files(
-    ctx: Namespace,
+    ctx: Namespace, run_log,
     step: Namespace,
     source: str,
     files: list[Path],
@@ -159,7 +159,7 @@ def _execute_files(
         try:
             execute_sql_text(
                 ctx,
-                conn,
+                run_log, conn,
                 sql_text,
                 sql_label=sql_file.name,
                 operation="sql_apply",

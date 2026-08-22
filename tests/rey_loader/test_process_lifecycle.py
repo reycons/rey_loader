@@ -36,14 +36,14 @@ def _calls_to(name: str) -> list[int]:
 class TestTheEntryPointUsesTheCommonBoundary:
     """Structure, asserted on the source rather than inferred."""
 
-    def test_bootstrap_is_not_called_directly(self) -> None:
+    def test_bootstrap_is_not_called_directly(self, run_log) -> None:
         assert _calls_to("build_ctx_for_app") == []
         assert "build_ctx_for_app" not in MAIN.read_text(encoding="utf-8")
 
-    def test_the_entry_point_enters_through_app_runtime(self) -> None:
+    def test_the_entry_point_enters_through_app_runtime(self, run_log) -> None:
         assert len(_calls_to("app_runtime")) == 1
 
-    def test_the_bootstrap_arguments_are_unchanged(self) -> None:
+    def test_the_bootstrap_arguments_are_unchanged(self, run_log) -> None:
         tree = ast.parse(MAIN.read_text(encoding="utf-8"))
         call = next(n for n in ast.walk(tree)
                     if isinstance(n, ast.Call)
@@ -51,7 +51,7 @@ class TestTheEntryPointUsesTheCommonBoundary:
 
         assert sorted(k.arg for k in call.keywords) == ["ctx", "operation"]
 
-    def test_the_app_adds_no_cleanup_of_its_own(self) -> None:
+    def test_the_app_adds_no_cleanup_of_its_own(self, run_log) -> None:
         source = MAIN.read_text(encoding="utf-8")
 
         assert "collect_runtime" not in source
@@ -61,7 +61,7 @@ class TestTheEntryPointUsesTheCommonBoundary:
 class TestTheBoundaryEnclosesFinalization:
     """Ordering: finalize inside, collect after."""
 
-    def test_finalize_run_log_runs_inside_the_boundary(self) -> None:
+    def test_finalize_run_log_runs_inside_the_boundary(self, run_log) -> None:
         tree = ast.parse(MAIN.read_text(encoding="utf-8"))
         with_node = next(n for n in ast.walk(tree)
                          if isinstance(n, ast.With)
@@ -73,7 +73,7 @@ class TestTheBoundaryEnclosesFinalization:
         finalize = _calls_to("finalize_run_log")
         assert finalize and set(finalize) <= enclosed
 
-    def test_run_app_operation_is_not_the_boundary(self) -> None:
+    def test_run_app_operation_is_not_the_boundary(self, run_log) -> None:
         """Execution lifecycle stays where it was; it can nest."""
         source = MAIN.read_text(encoding="utf-8")
 
@@ -92,11 +92,16 @@ class TestExitBehaviourIsUnchanged:
         def _build(*_a: Any, **kw: Any) -> Any:
             ctx = kw.get("ctx") or SimpleNamespace()
             ctx.run_log_path = "run.jsonl"
+            # Identity is established at the launch boundary before the run log
+            # is opened, so a context a launch produces always carries it.
+            ctx.run_id = "00000000-0000-4000-8000-000000000001"
+            ctx.run_timestamp = "20260822_000000"
+            ctx.log_file = "run.jsonl"
             return ctx
 
         monkeypatch.setattr(bootstrap, "build_ctx_for_app", _build)
         monkeypatch.setattr(loader_main, "finalize_run_log",
-                            lambda path: collected.append(f"finalized:{path}"))
+                            lambda log: collected.append(f"finalized:{log.path()}"))
 
         def _command(*_a: Any, **_k: Any) -> int:
             if raises is not None:
@@ -181,6 +186,9 @@ class TestCollectionHappensAfterFinalization:
         def _build(*_a: Any, **kw: Any) -> Any:
             ctx = kw.get("ctx") or SimpleNamespace()
             ctx.run_log_path = "run.jsonl"
+            ctx.log_file = "run.jsonl"
+            ctx.run_id = "00000000-0000-4000-8000-000000000001"
+            ctx.run_timestamp = "20260822_000000"
             ctx.connections = [SimpleNamespace(name="control", provider="postgres")]
             from rey_lib.db.connection import build_connections
             ctx.shared_connections = build_connections(ctx)
