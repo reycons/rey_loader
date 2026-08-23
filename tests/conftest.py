@@ -363,3 +363,20 @@ def make_run_log(
 def run_log(tmp_path):
     """The run log a test writes records through."""
     return make_run_log(tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def _own_no_connections_between_tests():
+    """Give every test a runtime holding no connections.
+
+    Connection objects belong to the runtime, not to a context, which is what
+    lets any context identifying a configured connection reach the same object.
+    Under test that same property makes one test's connections visible to the
+    next, so the runtime is emptied between them -- the equivalent of a fresh
+    process, which is what each test is pretending to be.
+    """
+    from rey_lib.db.connection import connection_owner
+
+    connection_owner().close()
+    yield
+    connection_owner().close()
