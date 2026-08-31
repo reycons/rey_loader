@@ -100,8 +100,9 @@ class TestExitBehaviourIsUnchanged:
             return ctx
 
         monkeypatch.setattr(bootstrap, "build_ctx_for_app", _build)
-        monkeypatch.setattr(loader_main, "finalize_run_log",
-                            lambda log: collected.append(f"finalized:{log.path()}"))
+        monkeypatch.setattr(
+            loader_main, "finalize_run_log",
+            lambda log, **_kwargs: collected.append(f"finalized:{log.path()}"))
 
         def _command(*_a: Any, **_k: Any) -> int:
             if raises is not None:
@@ -198,7 +199,7 @@ class TestCollectionHappensAfterFinalization:
 
         holder: dict[str, Any] = {}
 
-        def _finalize(_path: str) -> None:
+        def _finalize(_path: str, **_kwargs: Any) -> None:
             # The run log is finalized while the shared objects are still live.
             seen["open_during_finalize"] = holder["ctx"].shared_connections[
                 "control"].is_open
