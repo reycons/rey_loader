@@ -69,23 +69,53 @@ class _FakeConnection(ReyConnection):
         return self.core.rolled_back
 
 
-class _FakeAdapter:
+class _FakeSharedConnection:
+    """What ``shared_connection`` answers with: something holding a handle.
+
+    The connection is the sole path to a database, so that is the seam a test
+    stands in at. Patching the module's DBAdapter stopped standing in for
+    anything when sql_apply started opening its connection through
+    ``shared_connection``.
+    """
+
     def __init__(self, conn: _FakeConnection) -> None:
         self.conn = conn
 
-    def get_connection(self, _db_cfg: object, *, ctx: object = None) -> _FakeConnection:
+    def handle(self) -> _FakeConnection:
         return self.conn
 
 
-class _FailingAdapter:
-    def get_connection(self, _db_cfg: object, *, ctx: object = None) -> _FakeConnection:
-        raise RuntimeError("connection failed password=hunter2")
+def _fake_connection(conn: _FakeConnection):
+    """A ``shared_connection`` replacement handing back this connection."""
+    def shared_connection(_ctx: object, _name: str) -> _FakeSharedConnection:
+        return _FakeSharedConnection(conn)
+    return shared_connection
 
 
-def _records(ctx: object) -> list[dict]:
+def _failing_connection(_ctx: object, _name: str) -> _FakeSharedConnection:
+    """A ``shared_connection`` replacement that cannot open one."""
+    raise RuntimeError("connection failed password=hunter2")
+
+
+def _canonical(record: dict) -> dict:
+    """The canonical error object an ERROR record carries.
+
+    ERROR is one of the two record types whose whole payload is the
+    ``error_message`` object, so the identity and the evidence are read from
+    that object rather than from the record's own fields.
+    """
+    return record.get("error_message") or {}
+
+
+def _records(run_log: object) -> list[dict]:
+    """The records a run log wrote, read from the log's own path.
+
+    Asked of the run log rather than of the context: the log owns where it
+    writes, and a context does not carry that.
+    """
     return [
         json.loads(line)
-        for line in Path(ctx.run_log_path).read_text(encoding="utf-8").splitlines()
+        for line in Path(run_log.path()).read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
 
@@ -102,7 +132,7 @@ def test_sql_apply_emits_one_sql_execution_per_file(run_log,
     first.write_text("select 1", encoding="utf-8")
     second.write_text("select 2", encoding="utf-8")
     conn = _FakeConnection()
-    monkeypatch.setattr(sql_apply, "_db_adapter", _FakeAdapter(conn))
+    monkeypatch.setattr(sql_apply, "shared_connection", _fake_connection(conn))
 
     ctx = SimpleNamespace(
         log_file=str(tmp_path / "rey_loader.log"),
@@ -117,15 +147,26 @@ def test_sql_apply_emits_one_sql_execution_per_file(run_log,
                 stop_on_error=True,
             )
         ],
-        db_connections=[SimpleNamespace(name="warehouse")],
+        # A connection states its provider. DBAdapter resolves the dialect from
+        # it and refuses a connection that names neither a provider nor a
+        # recognizable driver, which is what this fixture predated.
+        db_connections=[SimpleNamespace(name="warehouse", provider="postgres")],
     )
 
     sql_apply.run_sql_apply(ctx, run_log, "apply_sql")
 
-    assert conn.executed == ["select 1", "select 2"]
-    assert conn.closed is True
+    # Each file is applied inside its own transaction, so the statements a
+    # connection sees are the envelope as well as the SQL.
+    assert [statement for statement in conn.executed
+            if statement not in ("BEGIN", "COMMIT", "ROLLBACK")] == [
+        "select 1", "select 2",
+    ]
+    # Not closed here. The connection is the runtime's, reached through
+    # shared_connection, so a step that used one does not dispose of something
+    # the next step is entitled to reuse.
+    assert conn.closed is False
     records = [
-        record for record in _records(ctx)
+        record for record in _records(run_log)
         if record["record_type"] == "SQL_EXECUTION"
     ]
     assert len(records) == 2
@@ -149,7 +190,7 @@ def test_sql_apply_failure_records_canonical_error_evidence(run_log,
     sql_file = sql_dir / "001_bad.sql"
     sql_file.write_text("select broken", encoding="utf-8")
     conn = _FakeConnection(fail=True)
-    monkeypatch.setattr(sql_apply, "_db_adapter", _FakeAdapter(conn))
+    monkeypatch.setattr(sql_apply, "shared_connection", _fake_connection(conn))
     ctx = SimpleNamespace(
         log_file=str(tmp_path / "rey_loader.log"),
         app_name="rey_loader",
@@ -163,20 +204,23 @@ def test_sql_apply_failure_records_canonical_error_evidence(run_log,
                 stop_on_error=True,
             )
         ],
-        db_connections=[SimpleNamespace(name="warehouse")],
+        # A connection states its provider. DBAdapter resolves the dialect from
+        # it and refuses a connection that names neither a provider nor a
+        # recognizable driver, which is what this fixture predated.
+        db_connections=[SimpleNamespace(name="warehouse", provider="postgres")],
     )
 
     with pytest.raises(DatabaseError):
         run_app_operation(ctx, run_log, "sql", lambda: sql_apply.run_sql_apply(ctx, run_log, "apply_sql"))
 
-    records = _records(ctx)
+    records = _records(run_log)
     error = next(record for record in records if record["record_type"] == "ERROR")
     failure = next(record for record in records if record["record_type"] == "RUN_COMPLETE")
     sql_record = next(record for record in records if record["record_type"] == "SQL_EXECUTION")
-    assert error["error_type"] == "DatabaseError"
-    assert "001_bad.sql failed" in error["error_message"]
+    assert _canonical(error)["error_type"] == "DatabaseError"
+    assert "001_bad.sql failed" in _canonical(error)["error_message"]
     assert "hunter2" not in json.dumps(records)
-    assert failure["failure_record_id"] == error["error_id"]
+    assert failure["failure_record_id"] == _canonical(error)["error_id"]
     assert sql_record["status"] == "failed"
     assert sql_record["sql_label"] == "001_bad.sql"
 
@@ -189,7 +233,7 @@ def test_sql_apply_connection_failure_records_canonical_error_evidence(run_log,
     sql_dir = tmp_path / "sql"
     sql_dir.mkdir()
     (sql_dir / "001.sql").write_text("select 1", encoding="utf-8")
-    monkeypatch.setattr(sql_apply, "_db_adapter", _FailingAdapter())
+    monkeypatch.setattr(sql_apply, "shared_connection", _failing_connection)
     ctx = SimpleNamespace(
         log_file=str(tmp_path / "rey_loader.log"),
         app_name="rey_loader",
@@ -203,16 +247,19 @@ def test_sql_apply_connection_failure_records_canonical_error_evidence(run_log,
                 stop_on_error=True,
             )
         ],
-        db_connections=[SimpleNamespace(name="warehouse")],
+        # A connection states its provider. DBAdapter resolves the dialect from
+        # it and refuses a connection that names neither a provider nor a
+        # recognizable driver, which is what this fixture predated.
+        db_connections=[SimpleNamespace(name="warehouse", provider="postgres")],
     )
 
     with pytest.raises(RuntimeError):
         run_app_operation(ctx, run_log, "sql", lambda: sql_apply.run_sql_apply(ctx, run_log, "apply_sql"))
 
-    records = _records(ctx)
+    records = _records(run_log)
     error = next(record for record in records if record["record_type"] == "ERROR")
     complete = next(record for record in records if record["record_type"] == "RUN_COMPLETE")
-    assert error["error_type"] == "RuntimeError"
-    assert "connection failed" in error["error_message"]
+    assert _canonical(error)["error_type"] == "RuntimeError"
+    assert "connection failed" in _canonical(error)["error_message"]
     assert "hunter2" not in json.dumps(records)
-    assert complete["failure_record_id"] == error["error_id"]
+    assert complete["failure_record_id"] == _canonical(error)["error_id"]
