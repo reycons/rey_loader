@@ -16,6 +16,10 @@ from unittest.mock import patch
 
 import pytest
 
+from rey_lib.config.applications import Application
+
+from tests.support.workflow_publication import prepared
+
 from rey_lib.workflow import run_workflow as coordinate_workflow
 
 from rey_loader.error_utils import ReyLoaderError
@@ -47,15 +51,28 @@ def _attach_workflows(ctx: Namespace) -> Namespace:
     ctx.workflows items are attribute-accessed by rey_loader, so use Namespace
     (mirroring resolved config), with dict processes/steps the coordinator reads.
     """
-    object.__setattr__(ctx, "workflows", [
-        Namespace(**_transform_load()),
-        Namespace(
-            name="transform_only",
-            processes={"transform_files": {}},
-            steps=[{"id": "transform_files", "label": "Transform files",
-                    "process": "transform_files"}],
-        ),
-    ])
+    definitions = [
+        _transform_load(),
+        {
+            "name": "transform_only",
+            "processes": {"transform_files": {}},
+            "steps": [{"id": "transform_files", "label": "Transform files",
+                       "process": "transform_files"}],
+        },
+    ]
+    # Every definition's operations are published together: one application,
+    # so preparing them one at a time would leave only the last publication.
+    attached = []
+    operations: dict[str, Any] = {}
+    for definition in definitions:
+        prepared_workflow, published_ctx = prepared(definition)
+        attached.append(Namespace(**prepared_workflow))
+        for operation in published_ctx.applications[0].workflow_operations:
+            operations[operation.name] = operation
+    object.__setattr__(ctx, "workflows", attached)
+    object.__setattr__(ctx, "applications", (
+        Application(name="rey_loader", workflow_operations=tuple(operations.values())),
+    ))
     return ctx
 
 
@@ -77,7 +94,8 @@ def test_steps_run_in_order_and_record_metadata(run_log, ctx: Namespace) -> None
     registry = build_process_registry(object())
 
     with patch("rey_loader.workflow.run_load", return_value=7) as mock_load:
-        run = coordinate_workflow(ctx, run_log, _transform_load(), registry, apply=True)
+        _wf, _ctx = prepared(_transform_load(), ctx)
+        run = coordinate_workflow(_ctx, run_log, _wf, registry, apply=True)
 
     assert run.status == "success"
     assert [o.id for o in run.outcomes] == ["transform_files", "load_files", "validate_load"]
@@ -92,7 +110,8 @@ def test_fail_closed_stops_at_failing_step(run_log, ctx: Namespace) -> None:
     registry = build_process_registry(object())
 
     with patch("rey_loader.workflow.run_load", side_effect=RuntimeError("db down")):
-        run = coordinate_workflow(ctx, run_log, _transform_load(), registry, apply=True)
+        _wf, _ctx = prepared(_transform_load(), ctx)
+        run = coordinate_workflow(_ctx, run_log, _wf, registry, apply=True)
 
     assert run.status == "failed"
     assert [o.status for o in run.outcomes] == ["ok", "failed"]
@@ -106,7 +125,8 @@ def test_dry_run_skips_load_but_transforms(run_log, ctx: Namespace) -> None:
     registry = build_process_registry(object())
 
     with patch("rey_loader.workflow.run_load") as mock_load:
-        run = coordinate_workflow(ctx, run_log, _transform_load(), registry, apply=False)
+        _wf, _ctx = prepared(_transform_load(), ctx)
+        run = coordinate_workflow(_ctx, run_log, _wf, registry, apply=False)
 
     assert run.status == "success"
     mock_load.assert_not_called()
@@ -160,7 +180,8 @@ def test_workflow_transform_output_matches_expected(run_log, ctx: Namespace) -> 
                    "process": "transform_files"}],
     }
 
-    run = coordinate_workflow(ctx, run_log, workflow, registry, apply=True)
+    _wf, _ctx = prepared(workflow, ctx)
+    run = coordinate_workflow(_ctx, run_log, _wf, registry, apply=True)
 
     assert run.status == "success"
     matches = sorted(converted.glob("tran_20260501_v01.csv"))

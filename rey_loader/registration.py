@@ -14,10 +14,19 @@ installation enables it and where it logs are that installation's answers, held
 in its ``apps:`` declaration. A registration carrying them would let a package
 decide something about an installation it has never seen.
 
-``workflow_operations`` is the approved surface a workflow may invoke. It is
-empty here: which operations this application approves is decided when the
-coordinator begins dispatching through them, and an application that has
-published nothing has approved nothing.
+``workflow_operations`` is the approved surface a workflow may invoke, derived
+from the handler boundary.
+
+Four of these are **dispatchers**: they read an ``operation`` and accept a
+different subset of the rest depending on which one was named. The published
+contract is the union that dispatcher intentionally accepts, and requiredness is
+declared only where it holds whatever the operation is. What a selected
+operation additionally requires -- ``sql_operation`` refusing without a
+``procedure_map`` or a ``routine_binding``, for instance -- is validated inside
+this application, where the semantics live.
+
+The generic coordinator validates the published outer contract. It does not
+learn rey_loader's operations.
 """
 
 from __future__ import annotations
@@ -115,6 +124,84 @@ CLI: dict[str, Any] = {   'shared_parameters': [   {   'name': 'config-path',
                                          'steps (load-files, sql-apply).'}]}
 
 
+#: Read by this application's own guard, which skips a file-scoped step when a
+#: run found no file. Declared data to the engine, which never learns what a
+#: scope is: the catalog handed over is already wrapped.
+_SCOPE = {
+    "name": "scope", "required": False, "value_type": "string",
+    "description": "Skip this step when the run found no file, where 'file'.",
+}
+
+
+def _operation(name: str, description: str, *parameters: dict[str, Any]) -> dict[str, Any]:
+    """One published operation, with the guard's parameter on every one."""
+    return {
+        "name": name,
+        "description": description,
+        "parameters": [*parameters, _SCOPE],
+    }
+
+
+def _setting(name: str, description: str, value_type: str = "string") -> dict[str, Any]:
+    """One optional setting a dispatcher accepts for some of its operations."""
+    return {
+        "name": name, "required": False, "value_type": value_type,
+        "description": description,
+    }
+
+
+#: The operations a workflow may name.
+WORKFLOW_OPERATIONS: list[dict[str, Any]] = [
+    _operation(
+        "file_operation",
+        "Discover, move or delete files.",
+        {"name": "operation", "required": True, "value_type": "choice",
+         "possible_values": ["discover", "discover_file", "move", "delete"],
+         "description": "Which file operation this step performs."},
+        _setting("data_source", "Data source whose declared paths and configs this reads."),
+        _setting("path", "Named path key on that data source.", "path"),
+        _setting("pattern", "Filename pattern selecting files."),
+        _setting("output", "Where the operation records what it found."),
+        _setting("to", "Destination, for a move.", "path"),
+        _setting("max_files_per_run", "Cap on files handled in one run.", "integer"),
+    ),
+    _operation(
+        "sql_operation",
+        "Execute one configured routine through the shared procedure map.",
+        {"name": "operation", "required": True, "value_type": "choice",
+         "possible_values": ["execute_parameter_result", "execute_no_return",
+                             "execute_routine_binding"],
+         "description": "Which execution shape this step uses."},
+        _setting("procedure_map", "Procedure map the routine is resolved through."),
+        _setting("routine_binding", "Binding naming the routine and its arguments."),
+        _setting("routine_name", "Routine to call, where named directly."),
+        _setting("connection", "Configured connection the routine runs on."),
+        _setting("params", "Parameters passed to the routine."),
+        _setting("values", "Values bound to those parameters."),
+    ),
+    _operation(
+        "validate",
+        "Validate a file before it is loaded.",
+        {"name": "operation", "required": True, "value_type": "choice",
+         "possible_values": ["delimited_header"],
+         "description": "Which validation this step performs."},
+        _setting("data_source", "Data source whose declared paths and configs this reads."),
+    ),
+    _operation(
+        "etl_operation",
+        "Transform or load one file through the loader.",
+        {"name": "operation", "required": True, "value_type": "choice",
+         "possible_values": ["transform_file", "load_file"],
+         "description": "Which ETL operation this step performs."},
+        _setting("data_source", "Data source whose declared paths and configs this reads."),
+    ),
+    _operation("transform_files", "Transform every configured input file."),
+    _operation("load_files", "Load every transformed file."),
+    _operation("validate_load", "Validate what the load produced."),
+    _operation("sql_apply", "Apply the configured SQL steps."),
+]
+
+
 def get_registration() -> dict[str, Any]:
     """Return this application's registration.
 
@@ -125,5 +212,5 @@ def get_registration() -> dict[str, Any]:
         "name": APPLICATION_NAME,
         "entry_point": "main.py",
         "cli": CLI,
-        "workflow_operations": [],
+        "workflow_operations": WORKFLOW_OPERATIONS,
     }

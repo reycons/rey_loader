@@ -145,9 +145,14 @@ def _as_list(value: Any) -> list[Any]:
 # ===========================================================================
 
 def build_process_registry(adapter: Any) -> dict[str, Any]:
-    """Return the loader's workflow process registry (name -> handler).
+    """Return the loader's approved implementation catalog (key -> handler).
 
-    Two families share one registry, dispatched by ``process`` name:
+    Not workflow membership. It answers what this application will let the
+    engine call; which processes exist, and how many name one of these, is the
+    workflow's declaration. Every key here is published in this application's
+    registration, and the engine refuses a workflow naming anything else.
+
+    Two families share one catalog, dispatched by implementation key:
     the per-file ingestion groups (file_operation / sql_operation / validate /
     etl_operation) and the internal batch-ETL groups (transform_files /
     load_files / validate_load / sql_apply). Stored procedures are routine
@@ -335,7 +340,13 @@ def run_process_workflow(ctx: Any, run_log: Any, adapter: Any, workflow_name: st
 
 
 def _guarded_registry(registry: dict[str, Any]) -> dict[str, Any]:
-    """Wrap handlers to skip ``config.scope: file`` steps when no file was found."""
+    """Wrap handlers to skip ``config.scope: file`` steps when no file was found.
+
+    Applied here, before the catalog is handed over, so what the coordinator
+    receives is already guarded. ``scope`` is published as an ordinary setting
+    and the engine validates it as declared data; what a scope means, and when a
+    run has no file, stay this application's answers.
+    """
     def guard(handler: Any) -> Any:
         def wrapped(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
             if getattr(ctx, "no_file", False) and str(_get(config, "scope", "")) == "file":

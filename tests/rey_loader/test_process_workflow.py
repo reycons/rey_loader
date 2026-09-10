@@ -15,6 +15,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from rey_lib.config.applications import (
+    Application,
+    ApplicationCommand,
+    ApplicationCommandParameter,
+)
+
+from tests.support.workflow_publication import prepared
+
 from rey_lib.workflow import RunContext, StepResult
 
 from rey_loader.error_utils import ReyLoaderError
@@ -38,11 +46,37 @@ class _NS:
 
 
 def _workflow(*steps, processes=None):
-    return _NS(
-        name="w", app="rey_loader",
-        processes=processes or _NS(file_operation=_NS(), sql_operation=_NS(),
-                                   validate=_NS(), etl_operation=_NS()),
-        steps=list(steps),
+    """One workflow whose processes bind to same-named published operations."""
+    processes = processes or _NS(
+        file_operation=_NS(implementation="file_operation"),
+        sql_operation=_NS(implementation="sql_operation"),
+        validate=_NS(implementation="validate"),
+        etl_operation=_NS(implementation="etl_operation"),
+    )
+    return _NS(name="w", app="rey_loader", processes=processes, steps=list(steps))
+
+
+def _publishing(*names: str, **parameters):
+    """An application publishing these operations, with the settings named.
+
+    The fixtures configure a marker and an operation; publication has to declare
+    them or validation refuses the step, which is the contract working rather
+    than a fixture detail.
+    """
+    return (
+        Application(
+            name="rey_loader",
+            workflow_operations=tuple(
+                ApplicationCommand(
+                    name=name,
+                    parameters=tuple(
+                        ApplicationCommandParameter(name=one)
+                        for one in ("marker", "operation", "scope", "id")
+                    ),
+                )
+                for name in names
+            ),
+        ),
     )
 
 
@@ -84,7 +118,8 @@ def test_run_process_workflow_is_a_single_ordered_pass(run_log):
                                                           operation="discover_file")),
         _NS(id="s3", process="validate", config=_NS(marker="s3")),
     )
-    ctx = _NS(workflows=[wf])
+    ctx = _NS(workflows=[wf], applications=_publishing(
+        "file_operation", "sql_operation", "validate", "etl_operation"))
     with patch("rey_loader.workflow.build_process_registry", return_value=stub):
         code = run_process_workflow(ctx, run_log, object(), "w", apply=True)
     assert code == 0
@@ -139,7 +174,8 @@ def test_no_file_skips_file_scoped_steps(run_log):
         _NS(id="batch_step", process="sql_operation", config=_NS(id="batch_step")),
         _NS(id="file_step", process="validate", config=_NS(id="file_step", scope="file")),
     )
-    ctx = _NS(workflows=[wf], no_file=False)
+    ctx = _NS(workflows=[wf], no_file=False, applications=_publishing(
+        "file_operation", "sql_operation", "validate", "etl_operation"))
     with patch("rey_loader.workflow.build_process_registry", return_value=stub):
         run_process_workflow(ctx, run_log, object(), "w", apply=True)
     assert "discover" in ran and "batch_step" in ran  # batch-scoped steps run
