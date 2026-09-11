@@ -105,7 +105,12 @@ def test_steps_run_in_order_and_record_metadata(run_log, ctx: Namespace) -> None
 
 
 def test_fail_closed_stops_at_failing_step(run_log, ctx: Namespace) -> None:
-    """A failing load stops the workflow; validate_load never runs."""
+    """A failing load stops the workflow; validate_load never runs.
+
+    The walk continues to the end of the declared order so an always_run step
+    could still be reached, so the remaining ordinary step is recorded as
+    skipped rather than absent. It does not run.
+    """
     write_advantage_csv(_inbox(ctx), "tran_20260501.csv")
     registry = build_process_registry(object())
 
@@ -114,7 +119,7 @@ def test_fail_closed_stops_at_failing_step(run_log, ctx: Namespace) -> None:
         run = coordinate_workflow(_ctx, run_log, _wf, registry, apply=True)
 
     assert run.status == "failed"
-    assert [o.status for o in run.outcomes] == ["ok", "failed"]
+    assert [o.status for o in run.outcomes] == ["ok", "failed", "skipped"]
     assert "validation_result" not in run.context.metadata
 
 
