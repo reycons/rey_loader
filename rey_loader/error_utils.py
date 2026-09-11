@@ -21,7 +21,3 @@ __all__ = [
 
 class ReyLoaderError(AppError):
     """Base exception for all rey_loader application errors."""
-
-
-class LLMError(ReyLoaderError):
-    """Raised when an LLM API call fails or returns an unexpected response."""
