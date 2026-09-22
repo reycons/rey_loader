@@ -117,6 +117,21 @@ CLI: dict[str, Any] = {   'shared_parameters': [   {   'name': 'config-path',
                           'value_type': 'string',
                           'description': 'For sql / sql_apply workflow, '
                                          'the sql_step name.'},
+                      {   'name': 'file',
+                          'required': False,
+                          'value_type': 'path',
+                          'description': 'With load: load this one file '
+                                         'instead of discovering files by '
+                                         'pickup pattern. Requires '
+                                         'data-source.'},
+                      {   'name': 'data-source',
+                          'required': False,
+                          'value_type': 'string',
+                          'description': 'With load and file: the configured '
+                                         'data source owning the destination '
+                                         'table. Required with file, because '
+                                         'an installation may declare more '
+                                         'than one.'},
                       {   'name': 'dry-run',
                           'required': False,
                           'value_type': 'flag',

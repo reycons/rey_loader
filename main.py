@@ -35,7 +35,7 @@ from rey_lib.logs import finalize_run_log
 from rey_lib.db.db_adapter import DBAdapter
 
 from rey_loader.error_utils import ReyLoaderError
-from rey_loader.load import run_load
+from rey_loader.load import run_load, run_load_one
 from rey_loader.sql_apply import run_sql_apply
 from rey_loader.transform import run_transform
 from rey_loader.workflow import needs_file_loop, run_file_workflow, run_process_workflow
@@ -145,10 +145,15 @@ def _execute_app_command(
         return 0
 
     if args.command == "load":
-        if apply:
-            run_load(ctx)
-        else:
+        if not apply:
             log.info("load skipped (dry-run).")
+        elif args.file:
+            # One named file instead of discovery. Everything else about the
+            # load is identical -- same transform, same destination, same
+            # connection -- so this selects the entry point, not a mode.
+            run_load_one(ctx, run_log, args.data_source, Path(args.file))
+        else:
+            run_load(ctx)
         return 0
 
     if args.command == "all":
@@ -198,6 +203,20 @@ def _parse_args() -> argparse.Namespace:
         "--source",
         default="",
         help="For sql / sql_apply workflow: the sql_step name.",
+    )
+    parser.add_argument(
+        "--file",
+        default="",
+        help="With load: load this one file instead of discovering files by "
+             "pickup pattern. Requires --data-source.",
+    )
+    parser.add_argument(
+        "--data-source",
+        dest="data_source",
+        default="",
+        help="With load --file: the configured data source owning the "
+             "destination table. Required, because an installation may "
+             "declare more than one.",
     )
     parser.add_argument(
         "--dry-run",
