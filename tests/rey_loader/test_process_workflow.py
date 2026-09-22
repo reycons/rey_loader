@@ -10,6 +10,7 @@ failing closed (never re-running the batch).
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +24,7 @@ from rey_lib.config.applications import (
 
 from tests.support.workflow_publication import prepared
 
+from rey_lib.files import file_loader
 from rey_lib.workflow import RunContext, StepResult
 
 from rey_loader.error_utils import ReyLoaderError
@@ -318,13 +320,30 @@ def test_etl_transform_calls_transform_one_with_current_file(run_log):
 
 
 def test_etl_load_calls_load_one_with_current_file(run_log):
+    """autospec, so the mock enforces load_one's REAL signature.
+
+    Without it a plain MagicMock accepts any arity, and this test passed for
+    a call that could never run: load_one takes (ctx, run_log, data_source,
+    load_cfg, file_path) and was being given four arguments with run_log
+    dropped. The assertion had been copied from the transform_one test, where
+    index 3 IS the file -- here index 3 is load_cfg, so the wrong position
+    agreed with the wrong call and both looked right.
+
+    The file is asserted by KEYWORD below rather than by position, so a
+    future argument cannot make this agree with a mistake again.
+    """
     ds = _NS(name="advantage", loads=[_NS(name="ld")])
     ctx = _NS(current_file="/x/f.csv", data_sources=[ds])
-    with patch("rey_loader.workflow.load_one", return_value=42) as l1:
+    with patch("rey_loader.workflow.load_one", autospec=True,
+               return_value=42) as l1:
         result = _process_etl_operation(ctx, run_log, {"operation": "load_file",
                                               "data_source": "advantage"},
                                         RunContext(metadata={}))
-    assert str(l1.call_args[0][3]).endswith("f.csv")
+
+    bound = inspect.signature(file_loader.load_one).bind(*l1.call_args[0],
+                                                         **l1.call_args[1])
+    assert str(bound.arguments["file_path"]).endswith("f.csv")
+    assert bound.arguments["run_log"] is run_log
     assert result.status == "ok" and "42" in result.detail
 
 

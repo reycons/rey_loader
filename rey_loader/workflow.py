@@ -484,7 +484,7 @@ def _process_etl_operation(ctx: Any, run_log: Any, config: dict[str, Any], run: 
 
     if operation == "load_file":
         load_cfg = _first_load(data_source)
-        rows = load_one(ctx, data_source, load_cfg, current)
+        rows = load_one(ctx, run_log, data_source, load_cfg, current)
         run.metadata["loaded_rows"] = rows
         return StepResult("etl:load_file", "ok", f"{rows} row(s)")
 
