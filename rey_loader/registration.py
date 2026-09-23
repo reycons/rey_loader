@@ -122,16 +122,50 @@ CLI: dict[str, Any] = {   'shared_parameters': [   {   'name': 'config-path',
                           'value_type': 'path',
                           'description': 'With load: load this one file '
                                          'instead of discovering files by '
-                                         'pickup pattern. Requires '
-                                         'data-source.'},
+                                         'pickup pattern. Pair with '
+                                         'data-source to use a configured '
+                                         'load, or with table and connection '
+                                         'to load it directly.'},
                       {   'name': 'data-source',
                           'required': False,
                           'value_type': 'string',
                           'description': 'With load and file: the configured '
                                          'data source owning the destination '
-                                         'table. Required with file, because '
-                                         'an installation may declare more '
-                                         'than one.'},
+                                         'table. Names which definition, '
+                                         'because an installation may declare '
+                                         'more than one. Mutually exclusive '
+                                         'with table/connection/create/'
+                                         'file-type, which that definition '
+                                         'already declares.'},
+                      {   'name': 'table',
+                          'required': False,
+                          'value_type': 'string',
+                          'description': 'With load and file: the '
+                                         'destination as schema.table, '
+                                         'loaded directly with no '
+                                         'configured data source. Requires '
+                                         'connection.'},
+                      {   'name': 'connection',
+                          'required': False,
+                          'value_type': 'string',
+                          'description': 'With load, file and table: the '
+                                         'configured connection the '
+                                         'destination is reached through.'},
+                      {   'name': 'create',
+                          'required': False,
+                          'value_type': 'flag',
+                          'description': 'With load, file and table: create '
+                                         'the destination from the file when '
+                                         'it does not exist. A configured '
+                                         'load declares this itself.'},
+                      {   'name': 'file-type',
+                          'required': False,
+                          'value_type': 'string',
+                          'description': 'With load, file and table: the '
+                                         "file's format, where its suffix "
+                                         'does not name one. A configured '
+                                         'load declares this on its '
+                                         'transform.'},
                       {   'name': 'dry-run',
                           'required': False,
                           'value_type': 'flag',

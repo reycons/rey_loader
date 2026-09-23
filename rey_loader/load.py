@@ -13,13 +13,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from rey_lib.config.config_utils import Namespace
+from rey_lib.db.connection import shared_connection
+from rey_lib.files.file_loader import load_file_to_table as _load_file_to_table
 from rey_lib.files.file_loader import load_one as _load_one
 from rey_lib.files.file_loader import run_load as _run_load
 from rey_lib.logs import get_logger
 
 from rey_loader.error_utils import ReyLoaderError
 
-__all__ = ["run_load", "run_load_one"]
+__all__ = ["run_load", "run_load_direct", "run_load_one"]
 
 _logger = get_logger(__name__)
 
@@ -43,6 +45,63 @@ def run_load(ctx: Namespace) -> int:
     """
     total = _run_load(ctx, sql_dir=ctx.sql_dir)
     _logger.info("Load stage complete: %d row(s) loaded.", total)
+    return total
+
+
+def run_load_direct(
+    ctx: Namespace,
+    run_log,
+    file_path: Path,
+    destination: str,
+    connection: str,
+    *,
+    create_destination: bool = False,
+    file_type: str = "",
+) -> int:
+    """Load one named file into one named table. No configured data source.
+
+    The arguments say everything a load needs, so nothing is read from
+    configuration and nothing is manufactured to stand in for it. The object
+    graph is the same one a configured feed runs -- a DataFile for the
+    format, an IdentityTransform, a DataLoader for the destination -- built
+    from arguments instead of YAML.
+
+    Parameters
+    ----------
+    file_path : Path
+        The file to load.
+    destination : str
+        ``schema.table``, or ``database.schema.table`` where the backend
+        qualifies that way.
+    connection : str
+        Name of a configured connection. Only the CONNECTION comes from
+        configuration: it is a credential and a host, not a load definition.
+    create_destination : bool
+        Whether an absent table may be created from the file.
+    file_type : str
+        The format, where the suffix does not name one.
+
+    Returns
+    -------
+    int
+        Rows loaded.
+
+    Raises
+    ------
+    ReyLoaderError
+        If the file does not exist.
+    """
+    if not file_path.is_file():
+        raise ReyLoaderError(f"load --file: no such file: {file_path}")
+
+    conn = shared_connection(ctx, connection).handle()
+    _logger.info("Loading %s directly into %s via '%s'",
+                 file_path.name, destination, connection)
+    total = _load_file_to_table(
+        ctx, run_log, conn, file_path, destination,
+        create_destination=create_destination, file_type=file_type,
+    )
+    _logger.info("Load complete: %d row(s) loaded.", total)
     return total
 
 

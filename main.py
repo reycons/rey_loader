@@ -35,7 +35,7 @@ from rey_lib.logs import finalize_run_log
 from rey_lib.db.db_adapter import DBAdapter
 
 from rey_loader.error_utils import ReyLoaderError
-from rey_loader.load import run_load, run_load_one
+from rey_loader.load import run_load, run_load_direct, run_load_one
 from rey_loader.sql_apply import run_sql_apply
 from rey_loader.transform import run_transform
 from rey_loader.workflow import needs_file_loop, run_file_workflow, run_process_workflow
@@ -145,12 +145,19 @@ def _execute_app_command(
         return 0
 
     if args.command == "load":
+        _check_load_arguments(args)
         if not apply:
             log.info("load skipped (dry-run).")
+        elif args.file and args.table:
+            # DIRECT: the arguments say everything. No data source, no
+            # configured definition, nothing manufactured to stand in for one.
+            run_load_direct(
+                ctx, run_log, Path(args.file), args.table, args.connection,
+                create_destination=args.create, file_type=args.file_type,
+            )
         elif args.file:
-            # One named file instead of discovery. Everything else about the
-            # load is identical -- same transform, same destination, same
-            # connection -- so this selects the entry point, not a mode.
+            # CONFIGURED, one named file. The definition still decides the
+            # destination, the transform and the movements.
             run_load_one(ctx, run_log, args.data_source, Path(args.file))
         else:
             run_load(ctx)
@@ -177,6 +184,73 @@ def _execute_app_command(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
+
+#: Options only a DIRECT load may carry, and what a configured definition
+#: already declares instead.
+#:
+#: A configured load's definition owns its destination, connection, create
+#: policy and file type. Accepting one of these flags alongside
+#: ``--data-source`` would parse cleanly, do nothing, and leave the operator
+#: believing they had overridden the definition -- so they are REFUSED rather
+#: than ignored. A silent no-op flag is worse than a rejected one.
+_DIRECT_ONLY_OPTIONS: dict[str, str] = {
+    "table":      "load.destination_table",
+    "connection": "load.connection",
+    "create":     "load.create_destination_table",
+    "file_type":  "transforms[].file_type",
+}
+
+
+def _check_load_arguments(args: argparse.Namespace) -> None:
+    """Refuse an incomplete or mixed `load` invocation, by name.
+
+    Two valid single-file modes, and they must not collapse into one:
+
+        --file --data-source                CONFIGURED, the existing surface
+        --file --table --connection         DIRECT, no configuration at all
+
+    Raises:
+        ReyLoaderError: Naming the option that is missing or does not belong.
+    """
+    direct_given = [
+        name for name in _DIRECT_ONLY_OPTIONS if getattr(args, name, None)
+    ]
+
+    if args.data_source and direct_given:
+        owned = ", ".join(
+            f"--{name.replace('_', '-')} (the definition declares "
+            f"{_DIRECT_ONLY_OPTIONS[name]})"
+            for name in sorted(direct_given)
+        )
+        raise ReyLoaderError(
+            f"--data-source names a configured load, which already decides "
+            f"{owned}. Drop the option, or drop --data-source and give "
+            f"--table and --connection instead."
+        )
+
+    if direct_given and not args.file:
+        raise ReyLoaderError(
+            "--table and --connection load ONE named file; add --file, or "
+            "drop them to load every discovered file."
+        )
+
+    if args.table and not args.connection:
+        raise ReyLoaderError(
+            f"--table {args.table} names a destination with no way to reach "
+            "it. Add --connection <name>."
+        )
+    if args.connection and not args.table:
+        raise ReyLoaderError(
+            f"--connection {args.connection} names a connection with no "
+            "destination. Add --table <schema.table>."
+        )
+    if args.file and not (args.data_source or args.table):
+        raise ReyLoaderError(
+            "--file does not say where the file goes. Add --data-source to "
+            "use a configured load, or --table and --connection to load it "
+            "directly."
+        )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -217,6 +291,35 @@ def _parse_args() -> argparse.Namespace:
         help="With load --file: the configured data source owning the "
              "destination table. Required, because an installation may "
              "declare more than one.",
+    )
+    parser.add_argument(
+        "--table",
+        default="",
+        help="With load --file: the destination as schema.table, loading it "
+             "directly with no configured data source. Requires "
+             "--connection.",
+    )
+    parser.add_argument(
+        "--connection",
+        default="",
+        help="With load --file --table: the configured connection the "
+             "destination is reached through.",
+    )
+    parser.add_argument(
+        "--create",
+        action="store_true",
+        default=False,
+        help="With load --file --table: create the destination from the "
+             "file when it does not exist. A configured load declares this "
+             "in its own 'load:' block instead.",
+    )
+    parser.add_argument(
+        "--file-type",
+        dest="file_type",
+        default="",
+        help="With load --file --table: the file's format, where its suffix "
+             "does not name one. A configured load declares this on its "
+             "transform instead.",
     )
     parser.add_argument(
         "--dry-run",
