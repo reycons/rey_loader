@@ -24,7 +24,7 @@ from rey_lib.config.applications import (
 
 from tests.support.workflow_publication import prepared
 
-from rey_lib.files import file_loader
+from rey_lib.load import load_operation
 from rey_lib.workflow import RunContext, StepResult
 
 from rey_loader.error_utils import ReyLoaderError
@@ -340,7 +340,7 @@ def test_etl_load_calls_load_one_with_current_file(run_log):
                                               "data_source": "advantage"},
                                         RunContext(metadata={}))
 
-    bound = inspect.signature(file_loader.load_one).bind(*l1.call_args[0],
+    bound = inspect.signature(load_operation.load_one).bind(*l1.call_args[0],
                                                          **l1.call_args[1])
     assert str(bound.arguments["file_path"]).endswith("f.csv")
     assert bound.arguments["run_log"] is run_log
@@ -352,7 +352,7 @@ def test_etl_never_calls_the_batch_runners(run_log):
     with patch("rey_loader.workflow.transform_one", return_value=True), \
          patch("rey_lib.files.file_loader.run_transform",
                side_effect=AssertionError("batch runner must not be called")), \
-         patch("rey_lib.files.file_loader.run_load",
+         patch("rey_lib.load.load_operation.run_load",
                side_effect=AssertionError("batch runner must not be called")):
         _process_etl_operation(ctx, run_log, {"operation": "transform_file",
                                      "data_source": "advantage"}, RunContext(metadata={}))

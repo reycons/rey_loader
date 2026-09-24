@@ -26,7 +26,7 @@ from unittest.mock import patch
 
 import pytest
 
-from rey_lib.files import file_loader
+from rey_lib.load import load_operation
 from rey_loader import load as load_module
 from rey_loader.error_utils import ReyLoaderError
 
@@ -90,7 +90,7 @@ class TestItLoadsTheFileItWasGiven:
                 "advantage_balance", source_file,
             )
 
-        bound = inspect.signature(file_loader.load_one).bind(
+        bound = inspect.signature(load_operation.load_one).bind(
             *one.call_args[0], **one.call_args[1]
         )
         assert total == 7
@@ -125,7 +125,7 @@ class TestItLoadsTheFileItWasGiven:
                 "advantage_balance", source_file,
             )
 
-        bound = inspect.signature(file_loader.load_one).bind(
+        bound = inspect.signature(load_operation.load_one).bind(
             *one.call_args[0], **one.call_args[1]
         )
         assert bound.arguments["load_cfg"].name == "advantage_balance_load"

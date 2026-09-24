@@ -35,7 +35,8 @@ from typing import Any
 
 from rey_lib.db.connection import shared_connection
 from rey_lib.db.procedure_map import execute_mapped_routine
-from rey_lib.files.file_loader import load_one, transform_one, validate_one
+from rey_lib.files.file_loader import transform_one, validate_one
+from rey_lib.load.load_operation import load_one
 from rey_lib.files.file_utils import delete_file, move_file, visible_files
 from rey_lib.logs import get_logger
 from rey_lib.workflow import (
