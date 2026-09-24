@@ -33,11 +33,193 @@ from __future__ import annotations
 
 from typing import Any
 
+from rey_lib.files.file_loader import supported_file_types
+
 __all__ = ["APPLICATION_NAME", "get_registration"]
 
 #: The registered identity. One value, matched against the installation's own
 #: declaration; a disagreement is refused rather than reconciled.
 APPLICATION_NAME = "rey_loader"
+
+#: An execution mode, not part of what is being defined -- so it is declared
+#: beside the action that runs the command rather than among its fields.
+_DRY_RUN: dict[str, Any] = {
+    "name": "dry-run",
+    "required": False,
+    "value_type": "flag",
+    "placement": "action_bar",
+    "description": "Skip the database and file-mutating steps.",
+}
+
+#: The three shapes a `load` may take, read from main.py's own refusals.
+#:
+#: `_check_load_arguments` accepts exactly these and rejects every other
+#: combination, but only once the command has been assembled -- so a surface
+#: offering all the fields at once can only be corrected after the fact.
+#: Declaring the shapes lets one be chosen instead.
+#:
+#:     load                                  every configured data source
+#:     load --file --data-source             one file, the definition decides
+#:     load --file --table --connection      one file, no configuration at all
+_LOAD_SHAPE = "load_shape"
+_DISCOVERY = "discovery"
+_CONFIGURED = "configured"
+_DIRECT = "direct"
+
+#: Every command this application offers, each with exactly the parameters that
+#: invocation reads.
+#:
+#: DECLARED PER COMMAND, not as one union carried by a positional `command`
+#: parameter. Both styles resolve, but the union gives every command every
+#: field: `run-workflow` offered a destination table, and `load` offered
+#: `source`, which is an sql_step name that no load path reads. The two only
+#: looked related because they were shown together.
+#:
+#: The parser stays wider than this on purpose -- it accepts any option with
+#: any command -- so narrowing here removes no invocation. What it removes is
+#: the offer of one that does nothing.
+_COMMANDS: list[dict[str, Any]] = [
+    {
+        "name": "run-workflow",
+        "description": "Run a configured loader workflow by name.",
+        "parameters": [
+            {
+                "name": "workflow",
+                # REQUIRED, and unconditionally so: _run_workflow_command
+                # raises "run-workflow requires --workflow <name>" without it.
+                "required": True,
+                "value_type": "choice",
+                "possible_values_from": "workflows",
+                "description": "Workflow declared under 'workflows'.",
+            },
+            {
+                "name": "source",
+                "required": False,
+                "value_type": "string",
+                "placeholder": "sql_step_name",
+                "description": "For an sql or sql_apply workflow, which "
+                               "sql_step to run.",
+            },
+            _DRY_RUN,
+        ],
+    },
+    {
+        "name": "transform",
+        "description": "Transform every configured input file.",
+        # Takes nothing. run_transform(ctx) reads no argument, and does not
+        # consult the dry-run flag either -- so offering one would be a
+        # control with nothing behind it.
+        "parameters": [],
+    },
+    {
+        "name": "load",
+        "description": "Load files into their destinations.",
+        "mode_groups": [
+            {
+                "name": _LOAD_SHAPE,
+                "label": "Load",
+                "default": _DISCOVERY,
+                "modes": [
+                    {"name": _DISCOVERY,
+                     "label": "Every configured data source"},
+                    {"name": _CONFIGURED,
+                     "label": "One file, configured data source"},
+                    {"name": _DIRECT,
+                     "label": "One file, direct destination"},
+                ],
+            },
+        ],
+        "parameters": [
+            {
+                "name": "file",
+                "required": False,
+                "required_when": {_LOAD_SHAPE: [_CONFIGURED, _DIRECT]},
+                "mode_membership": {_LOAD_SHAPE: [_CONFIGURED, _DIRECT]},
+                "value_type": "path",
+                "placeholder": "/path/to/file.csv",
+                "description": "The one file to load.",
+            },
+            {
+                "name": "data-source",
+                "required": False,
+                "required_when": {_LOAD_SHAPE: [_CONFIGURED]},
+                "mode_membership": {_LOAD_SHAPE: [_CONFIGURED]},
+                # NOT a choice, though ctx.data_sources exists and would
+                # resolve. `_choices` raises when a declared source is absent
+                # from the context, and an installation that declares no
+                # `data_sources:` block -- admin is one -- has no such
+                # attribute at all. Declaring it here took the whole
+                # configuration load down for that installation, not just this
+                # dropdown. See load_choices_cannot_come_from_an_optional_collection.
+                "value_type": "string",
+                "placeholder": "data_source_name",
+                "description": "The configured load whose definition owns the "
+                               "destination, transform and movements.",
+            },
+            {
+                "name": "table",
+                "required": False,
+                "required_when": {_LOAD_SHAPE: [_DIRECT]},
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT]},
+                "value_type": "string",
+                "placeholder": "schema.table",
+                "description": "The destination, as schema.table.",
+            },
+            {
+                "name": "connection",
+                "required": False,
+                "required_when": {_LOAD_SHAPE: [_DIRECT]},
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT]},
+                "value_type": "choice",
+                "possible_values_from": "connections",
+                "description": "The connection the destination is reached "
+                               "through.",
+            },
+            {
+                "name": "create",
+                "required": False,
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT]},
+                "value_type": "flag",
+                "description": "Create the destination from the file when it "
+                               "does not exist.",
+            },
+            {
+                "name": "file-type",
+                "required": False,
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT]},
+                "value_type": "choice",
+                # READ, never restated. A format added to the loader appears
+                # here without this declaration being maintained.
+                "possible_values": supported_file_types(),
+                # Empty is a real answer: data_file_for resolves the format
+                # from the suffix when none is declared.
+                "placeholder": "Auto detect",
+                "description": "The file's format, where its suffix does not "
+                               "name one.",
+            },
+            _DRY_RUN,
+        ],
+    },
+    {
+        "name": "all",
+        "description": "Transform every configured input file, then load.",
+        "parameters": [_DRY_RUN],
+    },
+    {
+        "name": "sql",
+        "description": "Apply the configured SQL steps.",
+        "parameters": [
+            {
+                "name": "source",
+                "required": False,
+                "value_type": "string",
+                "placeholder": "sql_step_name",
+                "description": "Which sql_step to run.",
+            },
+            _DRY_RUN,
+        ],
+    },
+]
 
 #: The command-line surface this application exposes, as an assembler of a
 #: pipeline step reads it.
@@ -94,83 +276,7 @@ CLI: dict[str, Any] = {   'shared_parameters': [   {   'name': 'config-path',
                                                 'snapshot (JSON); mutually '
                                                 'exclusive with '
                                                 'config-path.'}],
-    'parameters': [   {   'name': 'command',
-                          'required': False,
-                          'value_type': 'choice',
-                          'possible_values': [   'run-workflow',
-                                                 'transform',
-                                                 'load',
-                                                 'all',
-                                                 'sql'],
-                          'positional': True,
-                          'description': 'Public command, or run-workflow '
-                                         'with --workflow.'},
-                      {   'name': 'workflow',
-                          'required': False,
-                          'value_type': 'choice',
-                          'possible_values_from': 'workflows',
-                          'description': "Workflow name under 'workflows' "
-                                         'in rey_loader config (with '
-                                         'run-workflow).'},
-                      {   'name': 'source',
-                          'required': False,
-                          'value_type': 'string',
-                          'description': 'For sql / sql_apply workflow, '
-                                         'the sql_step name.'},
-                      {   'name': 'file',
-                          'required': False,
-                          'value_type': 'path',
-                          'description': 'With load: load this one file '
-                                         'instead of discovering files by '
-                                         'pickup pattern. Pair with '
-                                         'data-source to use a configured '
-                                         'load, or with table and connection '
-                                         'to load it directly.'},
-                      {   'name': 'data-source',
-                          'required': False,
-                          'value_type': 'string',
-                          'description': 'With load and file: the configured '
-                                         'data source owning the destination '
-                                         'table. Names which definition, '
-                                         'because an installation may declare '
-                                         'more than one. Mutually exclusive '
-                                         'with table/connection/create/'
-                                         'file-type, which that definition '
-                                         'already declares.'},
-                      {   'name': 'table',
-                          'required': False,
-                          'value_type': 'string',
-                          'description': 'With load and file: the '
-                                         'destination as schema.table, '
-                                         'loaded directly with no '
-                                         'configured data source. Requires '
-                                         'connection.'},
-                      {   'name': 'connection',
-                          'required': False,
-                          'value_type': 'string',
-                          'description': 'With load, file and table: the '
-                                         'configured connection the '
-                                         'destination is reached through.'},
-                      {   'name': 'create',
-                          'required': False,
-                          'value_type': 'flag',
-                          'description': 'With load, file and table: create '
-                                         'the destination from the file when '
-                                         'it does not exist. A configured '
-                                         'load declares this itself.'},
-                      {   'name': 'file-type',
-                          'required': False,
-                          'value_type': 'string',
-                          'description': 'With load, file and table: the '
-                                         "file's format, where its suffix "
-                                         'does not name one. A configured '
-                                         'load declares this on its '
-                                         'transform.'},
-                      {   'name': 'dry-run',
-                          'required': False,
-                          'value_type': 'flag',
-                          'description': 'Skip database/file-mutating '
-                                         'steps (load-files, sql-apply).'}]}
+    'commands': _COMMANDS}
 
 
 #: Read by this application's own guard, which skips a file-scoped step when a
@@ -259,6 +365,13 @@ def get_registration() -> dict[str, Any]:
     """
     return {
         "name": APPLICATION_NAME,
+        # The mark this application is known by, published the way its CLI and
+        # its operations are: which icon is an application's own is a fact
+        # about the application, not a choice an installation makes.
+        #
+        # A NAME, never markup. The surface that draws it holds the artwork and
+        # accepts no SVG from an installed distribution.
+        "icon": "app.rey_loader",
         "entry_point": "main.py",
         "cli": CLI,
         "workflow_operations": WORKFLOW_OPERATIONS,

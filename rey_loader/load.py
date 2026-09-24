@@ -13,7 +13,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from rey_lib.config.config_utils import Namespace
-from rey_lib.db.connection import shared_connection
 from rey_lib.files.file_loader import load_file_to_table as _load_file_to_table
 from rey_lib.files.file_loader import load_one as _load_one
 from rey_lib.files.file_loader import run_load as _run_load
@@ -94,11 +93,13 @@ def run_load_direct(
     if not file_path.is_file():
         raise ReyLoaderError(f"load --file: no such file: {file_path}")
 
-    conn = shared_connection(ctx, connection).handle()
+    # The NAME is passed, not a handle. The load builds its target from it and
+    # opens a connection from that target, so where the destination lives is
+    # said once rather than resolved here and named again below.
     _logger.info("Loading %s directly into %s via '%s'",
                  file_path.name, destination, connection)
     total = _load_file_to_table(
-        ctx, run_log, conn, file_path, destination,
+        ctx, run_log, file_path, destination, connection,
         create_destination=create_destination, file_type=file_type,
     )
     _logger.info("Load complete: %d row(s) loaded.", total)

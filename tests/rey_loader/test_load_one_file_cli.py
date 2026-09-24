@@ -48,6 +48,28 @@ def source_file(tmp_path: Path) -> Path:
     return path
 
 
+
+def registered_option_names() -> set[str]:
+    """Every option the registration publishes, across all its commands.
+
+    The registration used to declare one flat ``cli.parameters`` list carried
+    by a positional ``command`` parameter, so a name lived in exactly one
+    place. It declares ``cli.commands`` now, one per command with exactly the
+    parameters that invocation reads -- so a name lives under whichever
+    commands read it, and the surface these tests guard is the union.
+
+    The invariant is unchanged: the parser and the registration must offer the
+    same options (workflow.publish_an_app_capability step 5).
+    """
+    from rey_loader.registration import CLI
+
+    return {
+        parameter["name"]
+        for command in CLI["commands"]
+        for parameter in command["parameters"]
+    }
+
+
 class TestItLoadsTheFileItWasGiven:
     """The outcome the row exists for."""
 
@@ -207,9 +229,8 @@ class TestTheSurfaceIsRegistered:
         """
         from rey_loader.registration import CLI
 
-        registered = {
-            entry["name"]
-            for entry in CLI["parameters"] + CLI["shared_parameters"]
+        registered = registered_option_names() | {
+            entry["name"] for entry in CLI["shared_parameters"]
         }
         # argparse supplies --help itself; it is not part of the contract.
         unregistered = self._parser_argument_names() - registered - {"help"}
@@ -226,9 +247,7 @@ class TestTheSurfaceIsRegistered:
     def test_the_two_this_row_adds_are_on_both_sides(self) -> None:
         """Named directly, because the set comparison above would also pass
         if the parser and the registration were both missing them."""
-        from rey_loader.registration import CLI
-
-        registered = {entry["name"] for entry in CLI["parameters"]}
+        registered = registered_option_names()
         accepted = self._parser_argument_names()
 
         for name in ("file", "data-source"):
