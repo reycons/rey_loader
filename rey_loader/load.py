@@ -15,6 +15,9 @@ from pathlib import Path
 from rey_lib.config.config_utils import Namespace
 from rey_lib.load.load_operation import load_file_to_table as _load_file_to_table
 from rey_lib.load.load_operation import load_one as _load_one
+from rey_lib.load.load_operation import (
+    load_query_to_table as _load_query_to_table,
+)
 from rey_lib.load.load_operation import run_load as _run_load
 from rey_lib.logs import get_logger
 
@@ -101,6 +104,69 @@ def run_load_direct(
     total = _load_file_to_table(
         ctx, run_log, file_path, destination, connection,
         create_destination=create_destination, file_type=file_type,
+    )
+    _logger.info("Load complete: %d row(s) loaded.", total)
+    return total
+
+
+def run_load_query(
+    ctx: Namespace,
+    run_log,
+    statement: str,
+    source_connection: str,
+    destination: str,
+    connection: str,
+    *,
+    create_destination: bool = False,
+) -> int:
+    """Load what one statement returns into one named table.
+
+    The database sibling of ``run_load_direct``, and the same kind of wrapper:
+    it logs what is being loaded and where, calls the library, and logs the
+    count. The load itself is ``rey_lib``'s.
+
+    TWO CONNECTIONS, AND THEY MAY DIFFER. The statement runs on one and the
+    destination lives on the other; both are configured NAMES rather than
+    handles, and the library opens each where it is needed. A load between
+    two databases is the case this exists for, so nothing here assumes they
+    are the same.
+
+    Parameters
+    ----------
+    statement : str
+        The SQL whose result is loaded. Passed as written -- nothing here
+        parses it, rewrites it, or decides what it means.
+    source_connection : str
+        Name of the configured connection the statement runs on.
+    destination : str
+        ``schema.table``, or ``database.schema.table`` where the backend
+        qualifies that way.
+    connection : str
+        Name of the configured connection the DESTINATION lives on.
+    create_destination : bool
+        Whether an absent table may be created from the records.
+
+    Returns
+    -------
+    int
+        Rows loaded.
+
+    Raises
+    ------
+    ReyLoaderError
+        If the statement is empty. Refused here for the same reason
+        ``run_load_direct`` refuses a missing file: an empty source is a
+        mistyped invocation, and letting it reach the database turns it into
+        a syntax error from a provider.
+    """
+    if not statement.strip():
+        raise ReyLoaderError("load --statement: no statement given.")
+
+    _logger.info("Loading a query on '%s' into %s via '%s'",
+                 source_connection, destination, connection)
+    total = _load_query_to_table(
+        ctx, run_log, statement, source_connection, destination, connection,
+        create_destination=create_destination,
     )
     _logger.info("Load complete: %d row(s) loaded.", total)
     return total

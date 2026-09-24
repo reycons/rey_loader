@@ -39,8 +39,11 @@ from rey_loader.registration import get_registration
 CONSUMED: dict[str, set[str]] = {
     "run-workflow": {"workflow", "source", "dry-run"},
     "transform": set(),
-    "load": {"file", "data-source", "table", "connection", "create",
-             "file-type", "dry-run"},
+    # `statement` and `source-connection` are the SOURCE end of the fourth
+    # shape; `table`, `connection` and `create` are the destination and are
+    # shared with the direct file shape.
+    "load": {"file", "data-source", "statement", "source-connection",
+             "table", "connection", "create", "file-type", "dry-run"},
     "all": {"dry-run"},
     "sql": {"source", "dry-run"},
 }
@@ -77,7 +80,20 @@ class TestEachCommandDeclaresWhatItReads:
     def test_a_workflow_run_is_not_offered_a_destination(self) -> None:
         offered = set(parameters("run-workflow"))
         assert not offered & {"table", "connection", "create", "file-type",
-                              "data-source", "file"}
+                              "data-source", "file", "statement",
+                              "source-connection"}
+
+    def test_the_source_end_is_not_confused_with_the_destination(self) -> None:
+        """Two connections, and the declaration says which is which.
+
+        `connection` kept its name because it kept its meaning -- the
+        destination's. The source end is named for the end it belongs to, so
+        a reader filling the form is never asked to tell two identically
+        named controls apart.
+        """
+        load = parameters("load")
+        assert "DESTINATION" in load["connection"]["description"]
+        assert "SOURCE" in load["source-connection"]["description"]
 
 
 class TestTheRecipesInvariants:
@@ -98,8 +114,9 @@ class TestTheRecipesInvariants:
             for name in parameters(command)
         }
         assert declared == {
-            "workflow", "source", "file", "data-source", "table", "connection",
-            "create", "file-type", "dry-run",
+            "workflow", "source", "file", "data-source", "statement",
+            "source-connection", "table", "connection", "create", "file-type",
+            "dry-run",
         }
 
     def test_one_declaration_style_only(self) -> None:
@@ -146,16 +163,18 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
         load --file X                     REFUSED, "does not say where it goes"
         load --file X --data-source D     run_load_one
         load --file X --table T --conn C  run_load_direct
-        load --table T --conn C           REFUSED, needs --file
+        load --statement S --source-connection SC --table T --conn C
+                                          run_load_query
+        load --table T --conn C           REFUSED, needs a source
     """
 
     @staticmethod
     def _group() -> dict[str, Any]:
         return commands()["load"]["mode_groups"][0]
 
-    def test_three_shapes_are_declared(self) -> None:
+    def test_four_shapes_are_declared(self) -> None:
         assert [one["name"] for one in self._group()["modes"]] == [
-            "discovery", "configured", "direct",
+            "discovery", "configured", "direct", "query",
         ]
 
     def test_discovery_is_the_default_and_takes_nothing(self) -> None:
@@ -178,23 +197,41 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
         assert shape == {
             "file": {"configured", "direct"},
             "data-source": {"configured"},
-            "table": {"direct"},
-            "connection": {"direct"},
-            "create": {"direct"},
+            "statement": {"query"},
+            "source-connection": {"query"},
+            # The DESTINATION is shared: a query load names where its rows go
+            # exactly as a direct file load does.
+            "table": {"direct", "query"},
+            "connection": {"direct", "query"},
+            "create": {"direct", "query"},
+            # A statement has no format, so this stays file-only.
             "file-type": {"direct"},
         }
 
-    def test_the_direct_only_options_are_exactly_the_direct_ones(self) -> None:
-        """Against main.py's own set, not a list rewritten here."""
-        from main import _DIRECT_ONLY_OPTIONS
+    def test_the_unconfigured_options_are_exactly_the_declared_ones(self) -> None:
+        """Against main.py's own sets, not a list rewritten here.
 
-        direct = {
+        The set says what a CONFIGURED definition already owns, so every one
+        of those options belongs to a shape that has no definition -- direct
+        or query -- and to no other.
+        """
+        from main import _FILE_ONLY_OPTIONS, _UNCONFIGURED_ONLY_OPTIONS
+
+        unconfigured = {
             name for name, one in parameters("load").items()
-            if (one.get("mode_membership") or {}).get("load_shape") == ["direct"]
+            if set((one.get("mode_membership") or {}).get("load_shape", []))
+            and set((one.get("mode_membership") or {})["load_shape"])
+            <= {"direct", "query"}
         }
-        assert direct == {
-            name.replace("_", "-") for name in _DIRECT_ONLY_OPTIONS
-        }
+        assert unconfigured == {
+            name.replace("_", "-") for name in _UNCONFIGURED_ONLY_OPTIONS
+        } | {"statement", "source-connection"}
+
+        # And the file-only one is offered to the file shape alone.
+        for name in _FILE_ONLY_OPTIONS:
+            declared = name.replace("_", "-")
+            assert (parameters("load")[declared]["mode_membership"]
+                    ["load_shape"]) == ["direct"]
 
 
 class TestTheClosedVocabularies:

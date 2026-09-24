@@ -35,7 +35,12 @@ from rey_lib.logs import finalize_run_log
 from rey_lib.db.db_adapter import DBAdapter
 
 from rey_loader.error_utils import ReyLoaderError
-from rey_loader.load import run_load, run_load_direct, run_load_one
+from rey_loader.load import (
+    run_load,
+    run_load_direct,
+    run_load_one,
+    run_load_query,
+)
 from rey_loader.sql_apply import run_sql_apply
 from rey_loader.transform import run_transform
 from rey_loader.workflow import needs_file_loop, run_file_workflow, run_process_workflow
@@ -179,6 +184,14 @@ def _execute_app_command(
         _check_load_arguments(args)
         if not apply:
             log.info("load skipped (dry-run).")
+        elif args.statement:
+            # DIRECT, a query. Two connections: the statement runs on one and
+            # the destination lives on the other, and they may differ.
+            run_load_query(
+                ctx, run_log, args.statement, args.source_connection,
+                args.table, args.connection,
+                create_destination=args.create,
+            )
         elif args.file and args.table:
             # DIRECT: the arguments say everything. No data source, no
             # configured definition, nothing manufactured to stand in for one.
@@ -217,42 +230,60 @@ def _execute_app_command(
 # ---------------------------------------------------------------------------
 
 
-#: Options only a DIRECT load may carry, and what a configured definition
-#: already declares instead.
+#: Options a configured definition already declares, and what it calls them.
 #:
 #: A configured load's definition owns its destination, connection, create
 #: policy and file type. Accepting one of these flags alongside
 #: ``--data-source`` would parse cleanly, do nothing, and leave the operator
 #: believing they had overridden the definition -- so they are REFUSED rather
 #: than ignored. A silent no-op flag is worse than a rejected one.
-_DIRECT_ONLY_OPTIONS: dict[str, str] = {
+#:
+#: THE DESTINATION THREE ARE SHARED. A query load names its destination the
+#: same way a direct file load does, so these say "not with --data-source"
+#: rather than "only with --file".
+_UNCONFIGURED_ONLY_OPTIONS: dict[str, str] = {
     "table":      "load.destination_table",
     "connection": "load.connection",
     "create":     "load.create_destination_table",
     "file_type":  "transforms[].file_type",
 }
 
+#: What a FILE source may carry and a statement may not.
+#:
+#: ``file_type`` is a source property that sat among destination ones. A
+#: statement has no format, so offering it for a query shape would be a
+#: control with nothing behind it.
+_FILE_ONLY_OPTIONS: tuple[str, ...] = ("file_type",)
+
 
 def _check_load_arguments(args: argparse.Namespace) -> None:
     """Refuse an incomplete or mixed `load` invocation, by name.
 
-    Two valid single-file modes, and they must not collapse into one:
+    Three valid single-source modes, and they must not collapse into one:
 
-        --file --data-source                CONFIGURED, the existing surface
-        --file --table --connection         DIRECT, no configuration at all
+        --file --data-source                     CONFIGURED
+        --file --table --connection              DIRECT, a file
+        --statement --source-connection
+                    --table --connection         DIRECT, a query
+
+    **THE LOADER IS TWO-ENDED NOW, SO A REFUSAL MUST NAME THE END.** A query
+    load carries two connections -- one the statement runs on, one the
+    destination lives on -- and a message that says only "add --connection"
+    sends an operator to fix whichever end they were not thinking about.
 
     Raises:
-        ReyLoaderError: Naming the option that is missing or does not belong.
+        ReyLoaderError: Naming the option that is missing or does not belong,
+            and which END it belongs to.
     """
-    direct_given = [
-        name for name in _DIRECT_ONLY_OPTIONS if getattr(args, name, None)
+    unconfigured_given = [
+        name for name in _UNCONFIGURED_ONLY_OPTIONS if getattr(args, name, None)
     ]
 
-    if args.data_source and direct_given:
+    if args.data_source and unconfigured_given:
         owned = ", ".join(
             f"--{name.replace('_', '-')} (the definition declares "
-            f"{_DIRECT_ONLY_OPTIONS[name]})"
-            for name in sorted(direct_given)
+            f"{_UNCONFIGURED_ONLY_OPTIONS[name]})"
+            for name in sorted(unconfigured_given)
         )
         raise ReyLoaderError(
             f"--data-source names a configured load, which already decides "
@@ -260,21 +291,69 @@ def _check_load_arguments(args: argparse.Namespace) -> None:
             f"--table and --connection instead."
         )
 
-    if direct_given and not args.file:
+    # ONE SOURCE. A statement and a file are two, and choosing between them
+    # silently would load whichever the dispatch happens to test first.
+    if args.statement and args.file:
         raise ReyLoaderError(
-            "--table and --connection load ONE named file; add --file, or "
-            "drop them to load every discovered file."
+            "--statement and --file each name a SOURCE, and a load has one. "
+            "Drop whichever you did not mean."
+        )
+    if args.statement and args.data_source:
+        raise ReyLoaderError(
+            "--statement names a SOURCE directly, and --data-source names a "
+            "configured load that decides its own. Drop one."
+        )
+
+    file_only_given = [
+        name for name in _FILE_ONLY_OPTIONS if getattr(args, name, None)
+    ]
+    if args.statement and file_only_given:
+        named = ", ".join(
+            f"--{name.replace('_', '-')}" for name in sorted(file_only_given)
+        )
+        raise ReyLoaderError(
+            f"{named} describes a FILE's format, and --statement names a "
+            "query. Drop it."
+        )
+
+    # THE QUERY SHAPE, PROVED WHOLE. Each half is checked on its own terms so
+    # the message names the end that is short -- a statement with no table is
+    # a DESTINATION fault, not a source one.
+    if args.statement and not args.source_connection:
+        raise ReyLoaderError(
+            "--statement names a SOURCE with no way to reach it. Add "
+            "--source-connection <name>."
+        )
+    if args.source_connection and not args.statement:
+        raise ReyLoaderError(
+            f"--source-connection {args.source_connection} names a source "
+            "connection with no statement to run on it. Add --statement, or "
+            "drop it."
+        )
+    if args.statement and not args.table:
+        raise ReyLoaderError(
+            "--statement does not say where its rows go. Add --table "
+            "<schema.table> and --connection <name> for the DESTINATION."
+        )
+
+    # A DESTINATION WITH NO SOURCE AT ALL. This used to say "add --file",
+    # which would now refuse every valid query load: --table and --connection
+    # are given without a --file whenever the source is a statement.
+    if unconfigured_given and not (args.file or args.statement):
+        raise ReyLoaderError(
+            "--table and --connection load ONE named source; add --file or "
+            "--statement, or drop them to load every discovered file."
         )
 
     if args.table and not args.connection:
         raise ReyLoaderError(
-            f"--table {args.table} names a destination with no way to reach "
+            f"--table {args.table} names a DESTINATION with no way to reach "
             "it. Add --connection <name>."
         )
     if args.connection and not args.table:
         raise ReyLoaderError(
-            f"--connection {args.connection} names a connection with no "
-            "destination. Add --table <schema.table>."
+            f"--connection {args.connection} names a DESTINATION connection "
+            "with no destination. Add --table <schema.table>."
         )
     if args.file and not (args.data_source or args.table):
         raise ReyLoaderError(
@@ -343,6 +422,20 @@ def _parse_args() -> argparse.Namespace:
         help="With load --file --table: create the destination from the "
              "file when it does not exist. A configured load declares this "
              "in its own 'load:' block instead.",
+    )
+    parser.add_argument(
+        "--statement",
+        default="",
+        help="With load: the SQL whose result is loaded, instead of a file. "
+             "Requires --source-connection, and the destination options.",
+    )
+    parser.add_argument(
+        "--source-connection",
+        dest="source_connection",
+        default="",
+        help="With load --statement: the configured connection the SOURCE "
+             "statement runs on. The destination has its own --connection, "
+             "and the two may differ.",
     )
     parser.add_argument(
         "--file-type",

@@ -14,6 +14,9 @@ removes the surface that already exists.
 
     CONFIGURED   --file --data-source        the definition decides
     DIRECT       --file --table --connection the arguments decide
+
+A third, `--statement --source-connection --table --connection`, arrived with
+the database source; the file shapes here are unchanged by it.
 """
 
 from __future__ import annotations
@@ -32,8 +35,12 @@ from rey_loader.error_utils import ReyLoaderError
 
 def _args(**kwargs) -> argparse.Namespace:
     """A `load` invocation with everything absent unless named."""
+    # Every option the parser defines, because _check_load_arguments reads
+    # them directly -- a helper shorter than the parser tests a namespace no
+    # invocation produces.
     base = dict(command="load", file="", data_source="", table="",
-                connection="", create=False, file_type="")
+                connection="", create=False, file_type="",
+                statement="", source_connection="")
     base.update(kwargs)
     return argparse.Namespace(**base)
 

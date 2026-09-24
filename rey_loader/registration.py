@@ -61,10 +61,18 @@ _DRY_RUN: dict[str, Any] = {
 #:     load                                  every configured data source
 #:     load --file --data-source             one file, the definition decides
 #:     load --file --table --connection      one file, no configuration at all
+#:     load --statement --source-connection  one query, no configuration
+#:          --table --connection
+#:
+#: THE FOURTH SHAPE IS TWO-ENDED. Its source is a statement on one configured
+#: connection and its destination is a table on another, and they may differ --
+#: which is why the source options say which end they belong to and the
+#: destination ones keep the names they already had.
 _LOAD_SHAPE = "load_shape"
 _DISCOVERY = "discovery"
 _CONFIGURED = "configured"
 _DIRECT = "direct"
+_QUERY = "query"
 
 #: Every command this application offers, each with exactly the parameters that
 #: invocation reads.
@@ -126,6 +134,8 @@ _COMMANDS: list[dict[str, Any]] = [
                      "label": "One file, configured data source"},
                     {"name": _DIRECT,
                      "label": "One file, direct destination"},
+                    {"name": _QUERY,
+                     "label": "One query, direct destination"},
                 ],
             },
         ],
@@ -157,10 +167,30 @@ _COMMANDS: list[dict[str, Any]] = [
                                "destination, transform and movements.",
             },
             {
+                "name": "statement",
+                "required": False,
+                "required_when": {_LOAD_SHAPE: [_QUERY]},
+                "mode_membership": {_LOAD_SHAPE: [_QUERY]},
+                "value_type": "string",
+                "placeholder": "select ... from ...",
+                "description": "The SOURCE query, whose result is loaded.",
+            },
+            {
+                "name": "source-connection",
+                "required": False,
+                "required_when": {_LOAD_SHAPE: [_QUERY]},
+                "mode_membership": {_LOAD_SHAPE: [_QUERY]},
+                "value_type": "choice",
+                "possible_values_from": "connections",
+                "description": "The connection the SOURCE statement runs on. "
+                               "The destination has its own, and they may "
+                               "differ.",
+            },
+            {
                 "name": "table",
                 "required": False,
-                "required_when": {_LOAD_SHAPE: [_DIRECT]},
-                "mode_membership": {_LOAD_SHAPE: [_DIRECT]},
+                "required_when": {_LOAD_SHAPE: [_DIRECT, _QUERY]},
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY]},
                 "value_type": "string",
                 "placeholder": "schema.table",
                 "description": "The destination, as schema.table.",
@@ -168,20 +198,20 @@ _COMMANDS: list[dict[str, Any]] = [
             {
                 "name": "connection",
                 "required": False,
-                "required_when": {_LOAD_SHAPE: [_DIRECT]},
-                "mode_membership": {_LOAD_SHAPE: [_DIRECT]},
+                "required_when": {_LOAD_SHAPE: [_DIRECT, _QUERY]},
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY]},
                 "value_type": "choice",
                 "possible_values_from": "connections",
-                "description": "The connection the destination is reached "
+                "description": "The connection the DESTINATION is reached "
                                "through.",
             },
             {
                 "name": "create",
                 "required": False,
-                "mode_membership": {_LOAD_SHAPE: [_DIRECT]},
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY]},
                 "value_type": "flag",
-                "description": "Create the destination from the file when it "
-                               "does not exist.",
+                "description": "Create the destination from the source when "
+                               "it does not exist.",
             },
             {
                 "name": "file-type",
