@@ -32,7 +32,7 @@ def _args(**kwargs) -> argparse.Namespace:
     """A `load` invocation with everything absent unless named."""
     base = dict(command="load", file="", data_source="", table="",
                 connection="", create=False, file_type="",
-                statement="", source_connection="")
+                statement="", source_connection="", sql_file="")
     base.update(kwargs)
     return argparse.Namespace(**base)
 
@@ -260,3 +260,104 @@ class TestTheQueryEntryPoint:
                 )
 
         assert "--statement" in str(raised.value)
+
+
+class TestTheStatementCanComeFromAFile:
+    """``--sql-file`` is a TRANSPORT for the statement, not a second source.
+
+    A statement long enough to be worth version-controlling cannot be pasted
+    onto a command line and cannot be reviewed in a diff. Both forms produce
+    one QuerySource through one entry point, and nothing below the CLI learns
+    which was used -- which is what these assert.
+    """
+
+    @staticmethod
+    def _written(tmp_path, text: str) -> str:
+        path = tmp_path / "query.sql"
+        path.write_text(text, encoding="utf-8")
+        return str(path)
+
+    def test_a_file_and_an_inline_statement_produce_the_same_text(
+        self, tmp_path
+    ) -> None:
+        """THE ASSERTION THAT SAYS THIS IS A TRANSPORT.
+
+        If the two forms ever diverged below this point, one of them would be
+        a second source model.
+        """
+        from_file = rey_loader_main._statement_from(
+            _args(sql_file=self._written(tmp_path, _STATEMENT))
+        )
+        inline = rey_loader_main._statement_from(_args(statement=_STATEMENT))
+
+        assert from_file == inline == _STATEMENT
+
+    def test_a_complete_file_invocation_is_not_refused(self, tmp_path) -> None:
+        rey_loader_main._check_load_arguments(
+            _args(sql_file=self._written(tmp_path, _STATEMENT),
+                  source_connection="warehouse", table="landing.records",
+                  connection="reporting")
+        )
+
+    def test_giving_both_forms_is_refused_and_names_both(self) -> None:
+        """Nothing is left to choose between them."""
+        with pytest.raises(ReyLoaderError) as raised:
+            rey_loader_main._check_load_arguments(
+                _whole(sql_file="query.sql")
+            )
+
+        message = str(raised.value)
+        assert "--statement" in message and "--sql-file" in message
+
+    def test_a_missing_file_is_refused_by_name(self) -> None:
+        with pytest.raises(ReyLoaderError) as raised:
+            rey_loader_main._statement_from(_args(sql_file="/nowhere/q.sql"))
+
+        message = str(raised.value)
+        assert "--sql-file" in message and "/nowhere/q.sql" in message
+
+    def test_an_empty_file_is_refused(self, tmp_path) -> None:
+        """A mistyped path or an unsaved editor.
+
+        Letting it through reaches the database as a syntax error naming the
+        wrong thing.
+        """
+        with pytest.raises(ReyLoaderError) as raised:
+            rey_loader_main._statement_from(
+                _args(sql_file=self._written(tmp_path, "   \n\n"))
+            )
+
+        assert "--sql-file" in str(raised.value)
+
+    def test_the_whole_shape_is_proved_for_it_too(self, tmp_path) -> None:
+        """THE NORMALISATION WORKING, not a second set of checks.
+
+        Every refusal the inline form gets, this form gets -- because the
+        guard reads "a query is named" once rather than testing two options
+        everywhere.
+        """
+        given = self._written(tmp_path, _STATEMENT)
+
+        for absent, expected in (
+            ({"table": "landing.records", "connection": "reporting"},
+             "--source-connection"),
+            ({"source_connection": "warehouse"}, "--table"),
+            ({"source_connection": "warehouse", "table": "landing.records"},
+             "--connection"),
+        ):
+            with pytest.raises(ReyLoaderError) as raised:
+                rey_loader_main._check_load_arguments(
+                    _args(sql_file=given, **absent)
+                )
+            assert expected in str(raised.value), absent
+
+    def test_a_file_source_reaches_the_query_wrapper(self, tmp_path) -> None:
+        """One entry point, whichever transport was used."""
+        seen = TestTheDispatch._run(
+            _args(sql_file=self._written(tmp_path, _STATEMENT),
+                  source_connection="warehouse", table="landing.records",
+                  connection="reporting")
+        )
+
+        assert seen["statement"] == _STATEMENT
+        assert seen["other_shapes_untouched"]

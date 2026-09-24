@@ -40,7 +40,7 @@ def _args(**kwargs) -> argparse.Namespace:
     # invocation produces.
     base = dict(command="load", file="", data_source="", table="",
                 connection="", create=False, file_type="",
-                statement="", source_connection="")
+                statement="", source_connection="", sql_file="")
     base.update(kwargs)
     return argparse.Namespace(**base)
 

@@ -63,6 +63,8 @@ _DRY_RUN: dict[str, Any] = {
 #:     load --file --table --connection      one file, no configuration at all
 #:     load --statement --source-connection  one query, no configuration
 #:          --table --connection
+#:     load --sql-file --source-connection   the same query, from a file
+#:          --table --connection
 #:
 #: THE FOURTH SHAPE IS TWO-ENDED. Its source is a statement on one configured
 #: connection and its destination is a table on another, and they may differ --
@@ -73,6 +75,19 @@ _DISCOVERY = "discovery"
 _CONFIGURED = "configured"
 _DIRECT = "direct"
 _QUERY = "query"
+#: The same query shape, with the statement read from a file instead of given
+#: inline.
+#:
+#: A FIFTH MODE RATHER THAN A SECOND FIELD IN THE FOURTH, because
+#: `required_when` maps a group to modes and cannot say "one of these two".
+#: With both in `query`, neither could claim the requirement and a reader
+#: could press Run having named no source at all -- which is exactly what the
+#: mode group exists to stop.
+#:
+#: It is not a second SOURCE. Both modes build one QuerySource through one
+#: entry point; the mode says which control to draw, and nothing below the CLI
+#: learns which was used.
+_QUERY_FILE = "query_file"
 
 #: Every command this application offers, each with exactly the parameters that
 #: invocation reads.
@@ -136,6 +151,8 @@ _COMMANDS: list[dict[str, Any]] = [
                      "label": "One file, direct destination"},
                     {"name": _QUERY,
                      "label": "One query, direct destination"},
+                    {"name": _QUERY_FILE,
+                     "label": "One query from a file, direct destination"},
                 ],
             },
         ],
@@ -176,10 +193,20 @@ _COMMANDS: list[dict[str, Any]] = [
                 "description": "The SOURCE query, whose result is loaded.",
             },
             {
+                "name": "sql-file",
+                "required": False,
+                "required_when": {_LOAD_SHAPE: [_QUERY_FILE]},
+                "mode_membership": {_LOAD_SHAPE: [_QUERY_FILE]},
+                "value_type": "path",
+                "placeholder": "/path/to/query.sql",
+                "description": "A file holding the SOURCE query, instead of "
+                               "giving it inline.",
+            },
+            {
                 "name": "source-connection",
                 "required": False,
-                "required_when": {_LOAD_SHAPE: [_QUERY]},
-                "mode_membership": {_LOAD_SHAPE: [_QUERY]},
+                "required_when": {_LOAD_SHAPE: [_QUERY, _QUERY_FILE]},
+                "mode_membership": {_LOAD_SHAPE: [_QUERY, _QUERY_FILE]},
                 "value_type": "choice",
                 "possible_values_from": "connections",
                 "description": "The connection the SOURCE statement runs on. "
@@ -189,8 +216,8 @@ _COMMANDS: list[dict[str, Any]] = [
             {
                 "name": "table",
                 "required": False,
-                "required_when": {_LOAD_SHAPE: [_DIRECT, _QUERY]},
-                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY]},
+                "required_when": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
                 "value_type": "string",
                 "placeholder": "schema.table",
                 "description": "The destination, as schema.table.",
@@ -198,8 +225,8 @@ _COMMANDS: list[dict[str, Any]] = [
             {
                 "name": "connection",
                 "required": False,
-                "required_when": {_LOAD_SHAPE: [_DIRECT, _QUERY]},
-                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY]},
+                "required_when": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
                 "value_type": "choice",
                 "possible_values_from": "connections",
                 "description": "The connection the DESTINATION is reached "
@@ -208,7 +235,7 @@ _COMMANDS: list[dict[str, Any]] = [
             {
                 "name": "create",
                 "required": False,
-                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY]},
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
                 "value_type": "flag",
                 "description": "Create the destination from the source when "
                                "it does not exist.",

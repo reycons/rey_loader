@@ -28,6 +28,7 @@ preparse_config_args()
 from rey_lib.config.bootstrap import app_runtime
 from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_from_args
 from rey_lib.errors.error_utils import AppError, handle_exception
+from rey_lib.files import read_text_file
 from rey_lib.logs import get_logger
 from rey_lib.run_lifecycle import run_app_operation
 from rey_lib.logs import finalize_run_log
@@ -184,11 +185,11 @@ def _execute_app_command(
         _check_load_arguments(args)
         if not apply:
             log.info("load skipped (dry-run).")
-        elif args.statement:
+        elif args.statement or args.sql_file:
             # DIRECT, a query. Two connections: the statement runs on one and
             # the destination lives on the other, and they may differ.
             run_load_query(
-                ctx, run_log, args.statement, args.source_connection,
+                ctx, run_log, _statement_from(args), args.source_connection,
                 args.table, args.connection,
                 create_destination=args.create,
             )
@@ -256,6 +257,46 @@ _UNCONFIGURED_ONLY_OPTIONS: dict[str, str] = {
 _FILE_ONLY_OPTIONS: tuple[str, ...] = ("file_type",)
 
 
+def _statement_from(args: argparse.Namespace) -> str:
+    """The SOURCE statement, however it was given.
+
+    **THE FILE IS A TRANSPORT, NOT A SOURCE.** ``--sql-file`` carries the same
+    statement ``--statement`` carries inline; a statement long enough to be
+    worth version-controlling cannot be pasted onto a command line and cannot
+    be reviewed in a diff. Both produce one ``QuerySource``, and nothing below
+    this function learns which form was used.
+
+    Resolved HERE, at the CLI boundary, rather than in ``load.py``.
+    ``run_load_direct`` refuses a missing file down there because there the
+    file IS the source; this one holds text and is read where the transport is
+    interpreted.
+
+    Args:
+        args: The parsed invocation. Exactly one form is present -- the guard
+            refuses both, and refuses neither where a query shape is named.
+
+    Returns:
+        The statement.
+
+    Raises:
+        ReyLoaderError: When the named file does not exist, or holds nothing.
+            An empty file is a mistyped path or an unsaved editor, and letting
+            it through would reach the database as a syntax error naming the
+            wrong thing.
+    """
+    if not args.sql_file:
+        return str(args.statement or "")
+
+    path = Path(args.sql_file)
+    if not path.is_file():
+        raise ReyLoaderError(f"load --sql-file: no such file: {path}")
+
+    statement = read_text_file(path)
+    if not statement.strip():
+        raise ReyLoaderError(f"load --sql-file: {path} holds no statement.")
+    return statement
+
+
 def _check_load_arguments(args: argparse.Namespace) -> None:
     """Refuse an incomplete or mixed `load` invocation, by name.
 
@@ -291,58 +332,72 @@ def _check_load_arguments(args: argparse.Namespace) -> None:
             f"--table and --connection instead."
         )
 
+    # TWO WAYS OF SAYING ONE THING. --sql-file carries the same statement
+    # --statement does; giving both leaves nothing to decide between them.
+    if args.statement and args.sql_file:
+        raise ReyLoaderError(
+            "--statement and --sql-file both give the SOURCE statement. Drop "
+            "whichever you did not mean."
+        )
+
+    # A QUERY IS NAMED EITHER WAY. Normalised once so every refusal below
+    # holds for both forms rather than being written twice -- the shape they
+    # produce is identical, and only the transport differs.
+    names_a_query = bool(args.statement or args.sql_file)
+
     # ONE SOURCE. A statement and a file are two, and choosing between them
     # silently would load whichever the dispatch happens to test first.
-    if args.statement and args.file:
+    if names_a_query and args.file:
         raise ReyLoaderError(
-            "--statement and --file each name a SOURCE, and a load has one. "
+            "A statement and --file each name a SOURCE, and a load has one. "
             "Drop whichever you did not mean."
         )
-    if args.statement and args.data_source:
+    if names_a_query and args.data_source:
         raise ReyLoaderError(
-            "--statement names a SOURCE directly, and --data-source names a "
+            "A statement names a SOURCE directly, and --data-source names a "
             "configured load that decides its own. Drop one."
         )
 
     file_only_given = [
         name for name in _FILE_ONLY_OPTIONS if getattr(args, name, None)
     ]
-    if args.statement and file_only_given:
+    if names_a_query and file_only_given:
         named = ", ".join(
             f"--{name.replace('_', '-')}" for name in sorted(file_only_given)
         )
         raise ReyLoaderError(
-            f"{named} describes a FILE's format, and --statement names a "
-            "query. Drop it."
+            f"{named} describes a DATA file's format, and a statement names "
+            "a query. Drop it."
         )
 
     # THE QUERY SHAPE, PROVED WHOLE. Each half is checked on its own terms so
     # the message names the end that is short -- a statement with no table is
     # a DESTINATION fault, not a source one.
-    if args.statement and not args.source_connection:
+    if names_a_query and not args.source_connection:
         raise ReyLoaderError(
-            "--statement names a SOURCE with no way to reach it. Add "
+            "A statement names a SOURCE with no way to reach it. Add "
             "--source-connection <name>."
         )
-    if args.source_connection and not args.statement:
+    if args.source_connection and not names_a_query:
         raise ReyLoaderError(
             f"--source-connection {args.source_connection} names a source "
-            "connection with no statement to run on it. Add --statement, or "
-            "drop it."
+            "connection with no statement to run on it. Add --statement or "
+            "--sql-file, or drop it."
         )
-    if args.statement and not args.table:
+    if names_a_query and not args.table:
         raise ReyLoaderError(
-            "--statement does not say where its rows go. Add --table "
+            "A statement does not say where its rows go. Add --table "
             "<schema.table> and --connection <name> for the DESTINATION."
         )
 
     # A DESTINATION WITH NO SOURCE AT ALL. This used to say "add --file",
     # which would now refuse every valid query load: --table and --connection
     # are given without a --file whenever the source is a statement.
-    if unconfigured_given and not (args.file or args.statement):
+    if unconfigured_given and not (args.file or names_a_query):
         raise ReyLoaderError(
-            "--table and --connection load ONE named source; add --file or "
-            "--statement, or drop them to load every discovered file."
+            "--table and --connection load ONE named source; add --file, "
+            "--statement or --sql-file, or drop them to load every "
+            "discovered file."
         )
 
     if args.table and not args.connection:
@@ -428,6 +483,14 @@ def _parse_args() -> argparse.Namespace:
         default="",
         help="With load: the SQL whose result is loaded, instead of a file. "
              "Requires --source-connection, and the destination options.",
+    )
+    parser.add_argument(
+        "--sql-file",
+        dest="sql_file",
+        default="",
+        help="With load: a file holding the SQL to load from, instead of "
+             "giving it inline with --statement. The same statement, from "
+             "somewhere it can be version-controlled and reviewed.",
     )
     parser.add_argument(
         "--source-connection",
