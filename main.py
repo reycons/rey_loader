@@ -119,6 +119,36 @@ def _run_workflow_command(ctx: object, run_log, args: argparse.Namespace, apply:
     )
 
 
+def _invocation_settings(
+    args: argparse.Namespace,
+    *,
+    apply: bool,
+) -> dict[str, object]:
+    """What this command was asked to do, for the run to record.
+
+    THE OPTIONS AS GIVEN, including the ones that were not. A load refused for
+    naming a table with no connection is diagnosable only if the record shows
+    that --connection was empty; omitting the empty ones would hide exactly the
+    value that explains the refusal.
+
+    Scalars only. An option holding anything else is rendered as text rather
+    than dropped, because a reader needs to see that it was set at all.
+    """
+    given: dict[str, object] = {}
+    for name, value in sorted(vars(args).items()):
+        if name == "command":
+            continue
+        given[name] = (
+            value if value is None or isinstance(value, (str, int, float, bool))
+            else str(value)
+        )
+    # Not an option the reader typed: it says whether this run was allowed to
+    # change anything, which is the first thing to know about a run that did
+    # not.
+    given["apply"] = apply
+    return given
+
+
 def _run_app_command(
     ctx: object, run_log,
     args: argparse.Namespace,
@@ -130,6 +160,7 @@ def _run_app_command(
         ctx,
         run_log, str(args.command),
         lambda: _execute_app_command(ctx, run_log, args, apply, log),
+        settings=_invocation_settings(args, apply=apply),
     )
 
 

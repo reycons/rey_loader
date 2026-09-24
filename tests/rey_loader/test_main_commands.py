@@ -19,7 +19,7 @@ def test_transform_command_runs_transform_without_workflow(run_log) -> None:
 
     with patch.object(loader_main, "run_transform", return_value=1) as transform, \
          patch.object(loader_main, "run_app_operation",
-                      side_effect=lambda _ctx, _run_log, _op, func: func()) as lifecycle, \
+                      side_effect=lambda _ctx, _run_log, _op, func, **_kw: func()) as lifecycle, \
          patch.object(loader_main, "run_process_workflow") as workflow:
         assert loader_main._run_app_command(object(), run_log, args, True, log) == 0
 
@@ -36,7 +36,7 @@ def test_sql_command_runs_sql_without_workflow(run_log) -> None:
 
     with patch.object(loader_main, "run_sql_apply") as sql_apply, \
          patch.object(loader_main, "run_app_operation",
-                      side_effect=lambda _ctx, _run_log, _op, func: func()) as lifecycle, \
+                      side_effect=lambda _ctx, _run_log, _op, func, **_kw: func()) as lifecycle, \
          patch.object(loader_main, "run_process_workflow") as workflow:
         assert loader_main._run_app_command(ctx, run_log, args, True, log) == 0
 
@@ -55,3 +55,32 @@ def test_run_workflow_uses_explicit_workflow_name(run_log) -> None:
         assert loader_main._run_workflow_command(ctx, run_log, args, True) == 0
 
     assert workflow.call_args.args[3] == "transform_only"
+
+
+def test_a_command_records_what_it_was_invoked_with(run_log) -> None:
+    """The run says what it was ASKED to do, not only what went wrong.
+
+    A load refused for naming a table with no connection records the refusal
+    and, without this, nothing about the arguments -- so the reader cannot see
+    that --connection was empty, which is the whole explanation.
+    """
+    args = Namespace(command="load", dry_run=False, source="", workflow=None,
+                     file="test", table="test", connection="", create=False)
+    log = Mock()
+
+    with patch.object(loader_main, "run_app_operation",
+                      side_effect=lambda *_a, **kw: kw) as lifecycle, \
+         patch.object(loader_main, "run_process_workflow"):
+        loader_main._run_app_command(object(), run_log, args, False, log)
+
+    settings = lifecycle.call_args.kwargs["settings"]
+    # The EMPTY one is the point: it is what explains a refusal.
+    assert settings["connection"] == ""
+    assert settings["table"] == "test"
+    assert settings["file"] == "test"
+    # Whether the run was allowed to change anything is the first thing to
+    # know about one that did not.
+    assert settings["apply"] is False
+    # The operation is already recorded as the operation; repeating it as a
+    # setting would be two answers to one question.
+    assert "command" not in settings
