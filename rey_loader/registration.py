@@ -70,6 +70,26 @@ _DRY_RUN: dict[str, Any] = {
 #: connection and its destination is a table on another, and they may differ --
 #: which is why the source options say which end they belong to and the
 #: destination ones keep the names they already had.
+#: Which END of the movement a parameter describes.
+#:
+#: A load has two, and after the fourth shape they may be different databases.
+#: The shape a parameter belongs to is `mode_membership` and where it is drawn
+#: is `placement`; neither says which side it is, and `connection` on its own
+#: is ambiguous once there are two of them.
+#:
+#: `file-type` is a SOURCE property, which is settled rather than decided here:
+#: it sat among the destination options and was moved for that reason.
+#:
+#: `data-source` DECLARES NEITHER, deliberately. It names a configured load
+#: whose definition owns the destination, the transform and the movements -- it
+#: is not itself an end -- and it never appears beside `table`, `connection` or
+#: `create`, so there is no ambiguity for it to resolve. Calling it a
+#: destination would widen this field from "which side is this" to "roughly
+#: destination-related", and the first thing that costs is the ability to see
+#: an incomplete declaration for what it is.
+_SOURCE = "source"
+_DESTINATION = "destination"
+
 _LOAD_SHAPE = "load_shape"
 _DISCOVERY = "discovery"
 _CONFIGURED = "configured"
@@ -159,6 +179,7 @@ _COMMANDS: list[dict[str, Any]] = [
         "parameters": [
             {
                 "name": "file",
+                "endpoint": _SOURCE,
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_CONFIGURED, _DIRECT]},
                 "mode_membership": {_LOAD_SHAPE: [_CONFIGURED, _DIRECT]},
@@ -185,6 +206,7 @@ _COMMANDS: list[dict[str, Any]] = [
             },
             {
                 "name": "statement",
+                "endpoint": _SOURCE,
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_QUERY]},
                 "mode_membership": {_LOAD_SHAPE: [_QUERY]},
@@ -194,6 +216,7 @@ _COMMANDS: list[dict[str, Any]] = [
             },
             {
                 "name": "sql-file",
+                "endpoint": _SOURCE,
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_QUERY_FILE]},
                 "mode_membership": {_LOAD_SHAPE: [_QUERY_FILE]},
@@ -204,6 +227,7 @@ _COMMANDS: list[dict[str, Any]] = [
             },
             {
                 "name": "source-connection",
+                "endpoint": _SOURCE,
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_QUERY, _QUERY_FILE]},
                 "mode_membership": {_LOAD_SHAPE: [_QUERY, _QUERY_FILE]},
@@ -215,6 +239,7 @@ _COMMANDS: list[dict[str, Any]] = [
             },
             {
                 "name": "table",
+                "endpoint": _DESTINATION,
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
                 "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
@@ -224,6 +249,7 @@ _COMMANDS: list[dict[str, Any]] = [
             },
             {
                 "name": "connection",
+                "endpoint": _DESTINATION,
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
                 "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
@@ -234,6 +260,7 @@ _COMMANDS: list[dict[str, Any]] = [
             },
             {
                 "name": "create",
+                "endpoint": _DESTINATION,
                 "required": False,
                 "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
                 "value_type": "flag",
@@ -242,6 +269,7 @@ _COMMANDS: list[dict[str, Any]] = [
             },
             {
                 "name": "file-type",
+                "endpoint": _SOURCE,
                 "required": False,
                 "mode_membership": {_LOAD_SHAPE: [_DIRECT]},
                 "value_type": "choice",
