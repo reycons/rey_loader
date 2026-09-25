@@ -182,19 +182,33 @@ _COMMANDS: list[dict[str, Any]] = [
                 "name": _LOAD_SHAPE,
                 "label": "Load",
                 "default": _DISCOVERY,
+                # THE MARKS SHOW THE MOVEMENT, because that is what a shape is:
+                # where the rows come from, and where they go. Source, arrow,
+                # destination -- so the six are told apart by the picture and
+                # not by reading six similar sentences.
+                #
+                # Names in the drawing surface's vocabulary, never artwork. The
+                # label stays what the shape IS: it names the choice for
+                # assistive technology and is what shows on rollover.
                 "modes": [
                     {"name": _DISCOVERY,
-                     "label": "Every configured data source"},
+                     "label": "Every configured data source",
+                     "icons": ["queue", "next", "database"]},
                     {"name": _CONFIGURED,
-                     "label": "One file, configured data source"},
+                     "label": "One file, configured data source",
+                     "icons": ["config-file", "next", "database"]},
                     {"name": _DIRECT,
-                     "label": "One file, direct destination"},
+                     "label": "One file, direct destination",
+                     "icons": ["csv", "next", "table"]},
                     {"name": _QUERY,
-                     "label": "One query, direct destination"},
+                     "label": "One query, direct destination",
+                     "icons": ["database", "next", "table"]},
                     {"name": _QUERY_FILE,
-                     "label": "One query from a file, direct destination"},
+                     "label": "One query from a file, direct destination",
+                     "icons": ["contract", "next", "table"]},
                     {"name": _QUERY_TO_FILE,
-                     "label": "One query, to a file"},
+                     "label": "One query, to a file",
+                     "icons": ["database", "next", "csv"]},
                 ],
             },
         ],
@@ -526,6 +540,11 @@ def get_registration() -> dict[str, Any]:
     """
     return {
         "name": APPLICATION_NAME,
+        # What to CALL it, as distinct from what it is identified by. The name
+        # above is an identifier and reads like one; a surface with nothing else
+        # to go on had no choice but to draw it. Published here beside the icon
+        # and the CLI because what an application is called is its own fact.
+        "label": "Loader",
         # The mark this application is known by, published the way its CLI and
         # its operations are: which icon is an application's own is a fact
         # about the application, not a choice an installation makes.

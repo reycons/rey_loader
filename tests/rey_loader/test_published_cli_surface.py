@@ -163,6 +163,20 @@ class TestRequirednessIsNeverOverstated:
             assert one.get("required_when"), name
 
 
+class TestWhatItIsCalled:
+    """The name a surface draws, published beside the icon and the CLI."""
+
+    def test_the_distribution_says_what_it_is_called(self) -> None:
+        # Without this a surface has only the identifier to draw, and drew
+        # REY_LOADER. An identifier is not a name.
+        assert get_registration()["label"] == "Loader"
+
+    def test_the_identity_is_still_the_identifier(self) -> None:
+        # The label is what it is CALLED; the name is what it IS, and the
+        # installation's declaration is matched against this one.
+        assert get_registration()["name"] == "rey_loader"
+
+
 class TestTheLoadShapesReproduceTheInvocationMatrix:
     """Measured from main.py::_check_load_arguments and _execute_app_command.
 
@@ -188,6 +202,29 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
             "discovery", "configured", "direct", "query", "query_file",
             "query_to_file",
         ]
+
+    def test_every_shape_declares_the_movement_it_is(self) -> None:
+        """Source, arrow, destination -- so the six are told apart by picture.
+
+        ALL SIX OR NONE. A surface paints marks only where every alternative
+        declared some; a strip of marks and words is two controls sharing a
+        border. So one shape omitting its icons silently returns all six to a
+        dropdown, which is why this asserts the set rather than a sample.
+        """
+        assert {one["name"]: one["icons"] for one in self._group()["modes"]} == {
+            "discovery": ["queue", "next", "database"],
+            "configured": ["config-file", "next", "database"],
+            "direct": ["csv", "next", "table"],
+            "query": ["database", "next", "table"],
+            "query_file": ["contract", "next", "table"],
+            "query_to_file": ["database", "next", "csv"],
+        }
+
+    def test_every_shape_still_says_in_words_what_it_is(self) -> None:
+        # The label is not removed, it is taken out of the paint: it is the
+        # accessible name and the rollover.
+        for one in self._group()["modes"]:
+            assert one["label"].strip(), one["name"]
 
     def test_discovery_is_the_default_and_takes_nothing(self) -> None:
         """Bare `load` is a valid invocation and must stay the opening state.
