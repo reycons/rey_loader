@@ -39,12 +39,14 @@ from rey_loader.registration import get_registration
 CONSUMED: dict[str, set[str]] = {
     "run-workflow": {"workflow", "source", "dry-run"},
     "transform": set(),
-    # `statement` and `source-connection` are the SOURCE end of the fourth
-    # shape; `table`, `connection` and `create` are the destination and are
-    # shared with the direct file shape.
+    # `statement` and `source-connection` are the SOURCE end of the query
+    # shapes; `table`, `connection` and `create` are a DATABASE destination
+    # and are shared with the direct file shape; `out-file` is a FILE
+    # destination and shares nothing, because a file has no connection and
+    # nothing to create.
     "load": {"file", "data-source", "statement", "sql-file",
              "source-connection", "table", "connection", "create",
-             "file-type", "dry-run"},
+             "out-file", "file-type", "dry-run"},
     "all": {"dry-run"},
     "sql": {"source", "dry-run"},
 }
@@ -117,7 +119,7 @@ class TestTheRecipesInvariants:
         assert declared == {
             "workflow", "source", "file", "data-source", "statement",
             "sql-file", "source-connection", "table", "connection", "create",
-            "file-type", "dry-run",
+            "out-file", "file-type", "dry-run",
         }
 
     def test_one_declaration_style_only(self) -> None:
@@ -168,6 +170,8 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
                                           run_load_query
         load --sql-file Q.sql --source-connection SC --table T --conn C
                                           run_load_query, same statement
+        load --statement S --source-connection SC --out-file P
+                                          run_load_query_to_file
         load --table T --conn C           REFUSED, needs a source
     """
 
@@ -175,9 +179,10 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
     def _group() -> dict[str, Any]:
         return commands()["load"]["mode_groups"][0]
 
-    def test_five_shapes_are_declared(self) -> None:
+    def test_six_shapes_are_declared(self) -> None:
         assert [one["name"] for one in self._group()["modes"]] == [
             "discovery", "configured", "direct", "query", "query_file",
+            "query_to_file",
         ]
 
     def test_discovery_is_the_default_and_takes_nothing(self) -> None:
@@ -204,14 +209,19 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
             # comes from. Each owns its own transport so `required_when` can
             # name one -- with both in a single mode, neither could claim the
             # requirement and Run would be offered with no source named.
-            "statement": {"query"},
+            "statement": {"query", "query_to_file"},
             "sql-file": {"query_file"},
-            "source-connection": {"query", "query_file"},
-            # The DESTINATION is shared: a query load names where its rows go
-            # exactly as a direct file load does.
+            "source-connection": {"query", "query_file", "query_to_file"},
+            # A DATABASE destination is shared: a query load names where its
+            # rows go exactly as a direct file load does.
             "table": {"direct", "query", "query_file"},
             "connection": {"direct", "query", "query_file"},
             "create": {"direct", "query", "query_file"},
+            # A FILE destination shares NONE of those, and that is the shape
+            # of the fact rather than an omission: a file has no connection to
+            # be reached through and nothing to create, and its format comes
+            # from its own suffix.
+            "out-file": {"query_to_file"},
             # A statement has no format, so this stays file-only.
             "file-type": {"direct"},
         }
@@ -229,11 +239,11 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
             name for name, one in parameters("load").items()
             if set((one.get("mode_membership") or {}).get("load_shape", []))
             and set((one.get("mode_membership") or {})["load_shape"])
-            <= {"direct", "query", "query_file"}
+            <= {"direct", "query", "query_file", "query_to_file"}
         }
         assert unconfigured == {
             name.replace("_", "-") for name in _UNCONFIGURED_ONLY_OPTIONS
-        } | {"statement", "sql-file", "source-connection"}
+        } | {"statement", "sql-file", "source-connection", "out-file"}
 
         # And the file-only one is offered to the file shape alone.
         for name in _FILE_ONLY_OPTIONS:

@@ -32,7 +32,8 @@ def _args(**kwargs) -> argparse.Namespace:
     """A `load` invocation with everything absent unless named."""
     base = dict(command="load", file="", data_source="", table="",
                 connection="", create=False, file_type="",
-                statement="", source_connection="", sql_file="")
+                statement="", source_connection="", sql_file="",
+                out_file="")
     base.update(kwargs)
     return argparse.Namespace(**base)
 
@@ -260,6 +261,121 @@ class TestTheQueryEntryPoint:
                 )
 
         assert "--statement" in str(raised.value)
+
+
+class TestAQueryMayGoToAFile:
+    """The sixth shape: ``--out-file`` instead of a table and a connection.
+
+    A FILE DESTINATION HAS NO CONNECTION, which is the whole reason this is
+    its own shape rather than a choice inside the fourth. Every refusal here
+    exists so an operator is told which END is wrong -- the mistake this shape
+    invites is giving a file and a connection together, and being told to add
+    a table would send them to build a second destination.
+    """
+
+    @staticmethod
+    def _to_file(**over) -> argparse.Namespace:
+        return _args(statement=_STATEMENT, source_connection="warehouse",
+                     out_file="/tmp/rows.csv", **over)
+
+    def test_a_complete_invocation_is_accepted(self) -> None:
+        rey_loader_main._check_load_arguments(self._to_file())
+
+    def test_it_reaches_the_file_wrapper_and_not_the_table_one(self) -> None:
+        """One branch, and the table shape is not consulted."""
+        seen: dict = {}
+
+        def _capture(_ctx, _log, statement, source_connection, out_file):
+            seen.update(statement=statement,
+                        source_connection=source_connection,
+                        out_file=out_file)
+            return 4
+
+        with patch.object(rey_loader_main, "run_load_query_to_file", _capture), \
+             patch.object(rey_loader_main, "run_load_query") as to_table, \
+             patch.object(rey_loader_main, "run_load_direct") as direct, \
+             patch.object(rey_loader_main, "run_load_one") as one, \
+             patch.object(rey_loader_main, "run_load") as every:
+            rey_loader_main._execute_app_command(
+                _NS(), _NS(), self._to_file(), True, _NS(info=lambda *_a: None),
+            )
+
+        assert seen == {"statement": _STATEMENT,
+                        "source_connection": "warehouse",
+                        "out_file": "/tmp/rows.csv"}
+        assert not any(
+            (to_table.called, direct.called, one.called, every.called)
+        )
+
+    def test_no_format_is_passed_with_it(self) -> None:
+        """`--file-type` describes a file being READ.
+
+        Asserted on the SIGNATURE the dispatch calls, because the mistake it
+        prevents is silent: a destination format passed here would give one
+        name two meanings, and the guard already refuses `--file-type` beside
+        a statement so there would be nothing to pass anyway.
+        """
+        from inspect import signature
+
+        from rey_loader.load import run_load_query_to_file
+
+        assert "file_type" not in signature(run_load_query_to_file).parameters
+
+    def test_a_file_and_a_table_are_two_destinations(self) -> None:
+        with pytest.raises(ReyLoaderError) as raised:
+            rey_loader_main._check_load_arguments(
+                self._to_file(table="landing.records", connection="reporting")
+            )
+
+        message = str(raised.value)
+        assert "DESTINATION" in message
+        assert "--out-file" in message and "--table" in message
+
+    def test_a_connection_beside_it_is_refused_naming_the_file(self) -> None:
+        """NOT "add --table", which is what the old refusal would have said.
+
+        A file has no connection. Telling an operator to name a table sends
+        them to add a second destination for a load that already has one.
+        """
+        with pytest.raises(ReyLoaderError) as raised:
+            rey_loader_main._check_load_arguments(
+                self._to_file(connection="reporting")
+            )
+
+        message = str(raised.value)
+        assert "--out-file" in message
+        assert "--table" not in message
+
+    def test_a_file_destination_with_no_source(self) -> None:
+        with pytest.raises(ReyLoaderError) as raised:
+            rey_loader_main._check_load_arguments(
+                _args(out_file="/tmp/rows.csv")
+            )
+
+        message = str(raised.value)
+        assert "--out-file" in message and "--statement" in message
+
+    def test_a_statement_naming_neither_destination(self) -> None:
+        """The refusal now offers both, because there are two."""
+        with pytest.raises(ReyLoaderError) as raised:
+            rey_loader_main._check_load_arguments(
+                _args(statement=_STATEMENT, source_connection="warehouse")
+            )
+
+        message = str(raised.value)
+        assert "--table" in message and "--out-file" in message
+        assert "DESTINATION" in message
+
+    def test_a_format_is_still_refused_beside_a_statement(self) -> None:
+        """Unchanged, and it must stay that way.
+
+        `--file-type` is a SOURCE fact. A file destination did not make it
+        destination-sensitive: the out-file's suffix answers that.
+        """
+        with pytest.raises(ReyLoaderError) as raised:
+            rey_loader_main._check_load_arguments(self._to_file(file_type="CSV"))
+
+        assert "--file-type" in str(raised.value)
 
 
 class TestTheStatementCanComeFromAFile:

@@ -65,11 +65,14 @@ _DRY_RUN: dict[str, Any] = {
 #:          --table --connection
 #:     load --sql-file --source-connection   the same query, from a file
 #:          --table --connection
+#:     load --statement --source-connection  one query, to a file
+#:          --out-file
 #:
 #: THE FOURTH SHAPE IS TWO-ENDED. Its source is a statement on one configured
 #: connection and its destination is a table on another, and they may differ --
 #: which is why the source options say which end they belong to and the
 #: destination ones keep the names they already had.
+
 #: Which END of the movement a parameter describes.
 #:
 #: A load has two, and after the fourth shape they may be different databases.
@@ -108,6 +111,19 @@ _QUERY = "query"
 #: entry point; the mode says which control to draw, and nothing below the CLI
 #: learns which was used.
 _QUERY_FILE = "query_file"
+
+#: A query whose destination is a FILE rather than a table.
+#:
+#: A SIXTH MODE rather than a destination choice inside the fourth, for the
+#: reason `query_file` is a fifth: `required_when` maps a group to modes and
+#: cannot say "one of these two". With a table and a file destination in one
+#: mode, neither could claim the requirement and a reader could press Run
+#: having named nowhere for the rows to go.
+#:
+#: It names NO CONNECTION, because a file has none, and no format, because
+#: `--out-file`'s own suffix answers that through the resolver every file
+#: source already goes through.
+_QUERY_TO_FILE = "query_to_file"
 
 #: Every command this application offers, each with exactly the parameters that
 #: invocation reads.
@@ -173,6 +189,8 @@ _COMMANDS: list[dict[str, Any]] = [
                      "label": "One query, direct destination"},
                     {"name": _QUERY_FILE,
                      "label": "One query from a file, direct destination"},
+                    {"name": _QUERY_TO_FILE,
+                     "label": "One query, to a file"},
                 ],
             },
         ],
@@ -208,8 +226,8 @@ _COMMANDS: list[dict[str, Any]] = [
                 "name": "statement",
                 "endpoint": _SOURCE,
                 "required": False,
-                "required_when": {_LOAD_SHAPE: [_QUERY]},
-                "mode_membership": {_LOAD_SHAPE: [_QUERY]},
+                "required_when": {_LOAD_SHAPE: [_QUERY, _QUERY_TO_FILE]},
+                "mode_membership": {_LOAD_SHAPE: [_QUERY, _QUERY_TO_FILE]},
                 "value_type": "string",
                 "placeholder": "select ... from ...",
                 "description": "The SOURCE query, whose result is loaded.",
@@ -229,13 +247,32 @@ _COMMANDS: list[dict[str, Any]] = [
                 "name": "source-connection",
                 "endpoint": _SOURCE,
                 "required": False,
-                "required_when": {_LOAD_SHAPE: [_QUERY, _QUERY_FILE]},
-                "mode_membership": {_LOAD_SHAPE: [_QUERY, _QUERY_FILE]},
+                "required_when": {
+                    _LOAD_SHAPE: [_QUERY, _QUERY_FILE, _QUERY_TO_FILE],
+                },
+                "mode_membership": {
+                    _LOAD_SHAPE: [_QUERY, _QUERY_FILE, _QUERY_TO_FILE],
+                },
                 "value_type": "choice",
                 "possible_values_from": "connections",
                 "description": "The connection the SOURCE statement runs on. "
                                "The destination has its own, and they may "
                                "differ.",
+            },
+            {
+                "name": "out-file",
+                "endpoint": _DESTINATION,
+                "required": False,
+                "required_when": {_LOAD_SHAPE: [_QUERY_TO_FILE]},
+                "mode_membership": {_LOAD_SHAPE: [_QUERY_TO_FILE]},
+                "value_type": "path",
+                "placeholder": "/path/to/rows.csv",
+                # NO FORMAT BESIDE IT. The suffix names it, through the same
+                # resolver every file source goes through, and a suffix that
+                # names nothing is refused rather than guessed at. `file-type`
+                # stays what it is -- a property of a file being READ.
+                "description": "The destination file. Its suffix names the "
+                               "format, and it needs no connection.",
             },
             {
                 "name": "table",

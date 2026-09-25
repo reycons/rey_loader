@@ -16,6 +16,9 @@ from rey_lib.config.config_utils import Namespace
 from rey_lib.load.load_operation import load_file_to_table as _load_file_to_table
 from rey_lib.load.load_operation import load_one as _load_one
 from rey_lib.load.load_operation import (
+    load_query_to_file as _load_query_to_file,
+)
+from rey_lib.load.load_operation import (
     load_query_to_table as _load_query_to_table,
 )
 from rey_lib.load.load_operation import run_load as _run_load
@@ -169,6 +172,58 @@ def run_load_query(
         create_destination=create_destination,
     )
     _logger.info("Load complete: %d row(s) loaded.", total)
+    return total
+
+
+def run_load_query_to_file(
+    ctx: Namespace,
+    run_log,
+    statement: str,
+    source_connection: str,
+    out_file: str,
+) -> int:
+    """Load what one statement returns into one file.
+
+    The same wrapper as ``run_load_query`` with the other end swapped: it logs
+    what is being loaded and where, calls the library, and logs the count.
+
+    ONE CONNECTION, AND IT IS THE SOURCE'S. A file destination has none, so
+    none is taken -- accepting one and ignoring it would leave an operator
+    believing the rows had gone to a database.
+
+    NO FILE TYPE. The destination's format comes from ``out_file``'s own
+    suffix, through the resolver every file source already goes through.
+    ``--file-type`` describes a data file being READ and is refused beside a
+    statement, so there is nothing here for it to mean.
+
+    Parameters
+    ----------
+    statement : str
+        The SQL whose result is written. Passed as written.
+    source_connection : str
+        Name of the configured connection the statement runs on.
+    out_file : str
+        Where the rows go. Its suffix names the format.
+
+    Returns
+    -------
+    int
+        Rows written.
+
+    Raises
+    ------
+    ReyLoaderError
+        If the statement is empty, for the reason ``run_load_query`` gives.
+    """
+    if not statement.strip():
+        raise ReyLoaderError("load --statement: no statement given.")
+
+    _logger.info("Loading a query on '%s' into %s",
+                 source_connection, out_file)
+    total = _load_query_to_file(
+        ctx, run_log, statement, source_connection, out_file,
+    )
+    _logger.info("Load complete: %d row(s) written.", total)
     return total
 
 

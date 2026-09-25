@@ -41,6 +41,7 @@ from rey_loader.load import (
     run_load_direct,
     run_load_one,
     run_load_query,
+    run_load_query_to_file,
 )
 from rey_loader.sql_apply import run_sql_apply
 from rey_loader.transform import run_transform
@@ -185,9 +186,22 @@ def _execute_app_command(
         _check_load_arguments(args)
         if not apply:
             log.info("load skipped (dry-run).")
+        elif (args.statement or args.sql_file) and args.out_file:
+            # DIRECT, a query to a FILE. ONE connection, the source's: the
+            # destination is a file and has none.
+            # NO FILE TYPE. `--file-type` is a SOURCE fact -- it describes a
+            # data file being read, and the guard refuses it beside a
+            # statement. The destination's format comes from --out-file's own
+            # suffix, through the same resolver every file source goes
+            # through, which refuses by name rather than guessing.
+            run_load_query_to_file(
+                ctx, run_log, _statement_from(args), args.source_connection,
+                args.out_file,
+            )
         elif args.statement or args.sql_file:
-            # DIRECT, a query. Two connections: the statement runs on one and
-            # the destination lives on the other, and they may differ.
+            # DIRECT, a query to a TABLE. Two connections: the statement runs
+            # on one and the destination lives on the other, and they may
+            # differ.
             run_load_query(
                 ctx, run_log, _statement_from(args), args.source_connection,
                 args.table, args.connection,
@@ -305,7 +319,9 @@ def _check_load_arguments(args: argparse.Namespace) -> None:
         --file --data-source                     CONFIGURED
         --file --table --connection              DIRECT, a file
         --statement --source-connection
-                    --table --connection         DIRECT, a query
+                    --table --connection         DIRECT, a query to a table
+        --statement --source-connection
+                    --out-file                   DIRECT, a query to a file
 
     **THE LOADER IS TWO-ENDED NOW, SO A REFUSAL MUST NAME THE END.** A query
     load carries two connections -- one the statement runs on, one the
@@ -384,10 +400,33 @@ def _check_load_arguments(args: argparse.Namespace) -> None:
             "connection with no statement to run on it. Add --statement or "
             "--sql-file, or drop it."
         )
-    if names_a_query and not args.table:
+    # TWO DESTINATIONS. A table and a file are both where the rows go, and
+    # choosing between them silently would write one and leave the operator
+    # believing they had asked for the other.
+    if args.out_file and args.table:
+        raise ReyLoaderError(
+            "--out-file and --table each name a DESTINATION, and a load has "
+            "one. Drop whichever you did not mean."
+        )
+    if names_a_query and not (args.table or args.out_file):
         raise ReyLoaderError(
             "A statement does not say where its rows go. Add --table "
-            "<schema.table> and --connection <name> for the DESTINATION."
+            "<schema.table> and --connection <name>, or --out-file <path>, "
+            "for the DESTINATION."
+        )
+    # A FILE DESTINATION HAS NO CONNECTION, so one given beside it is a
+    # destination connection with no destination to reach -- said here rather
+    # than by the --connection refusal below, which would name --table and
+    # send the operator to add a second destination.
+    if args.out_file and args.connection:
+        raise ReyLoaderError(
+            f"--connection {args.connection} reaches a DESTINATION database, "
+            "and --out-file names a file, which has none. Drop it."
+        )
+    if args.out_file and not names_a_query:
+        raise ReyLoaderError(
+            f"--out-file {args.out_file} names a DESTINATION with no source "
+            "to fill it. Add --statement or --sql-file."
         )
 
     # A DESTINATION WITH NO SOURCE AT ALL. This used to say "add --file",
@@ -499,6 +538,14 @@ def _parse_args() -> argparse.Namespace:
         help="With load --statement: the configured connection the SOURCE "
              "statement runs on. The destination has its own --connection, "
              "and the two may differ.",
+    )
+    parser.add_argument(
+        "--out-file",
+        dest="out_file",
+        default="",
+        help="With load --statement: write the rows to this file instead of "
+             "a table. Its suffix names the format, and no connection is "
+             "needed because a file has none.",
     )
     parser.add_argument(
         "--file-type",
