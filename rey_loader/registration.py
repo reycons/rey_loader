@@ -227,27 +227,6 @@ _COMMANDS: list[dict[str, Any]] = [
                                "destination, transform and movements.",
             },
             {
-                "name": "statement",
-                "load_object": _SOURCE,
-                "required": False,
-                "required_when": {_LOAD_SHAPE: [_QUERY, _QUERY_TO_FILE]},
-                "mode_membership": {_LOAD_SHAPE: [_QUERY, _QUERY_TO_FILE]},
-                "value_type": "string",
-                "placeholder": "select ... from ...",
-                "description": "The SOURCE query, whose result is loaded.",
-            },
-            {
-                "name": "sql-file",
-                "load_object": _SOURCE,
-                "required": False,
-                "required_when": {_LOAD_SHAPE: [_QUERY_FILE]},
-                "mode_membership": {_LOAD_SHAPE: [_QUERY_FILE]},
-                "value_type": "path",
-                "placeholder": "/path/to/query.sql",
-                "description": "A file holding the SOURCE query, instead of "
-                               "giving it inline.",
-            },
-            {
                 "name": "source-connection",
                 "load_object": _SOURCE,
                 "required": False,
@@ -262,6 +241,33 @@ _COMMANDS: list[dict[str, Any]] = [
                 "description": "The connection the SOURCE statement runs on. "
                                "The destination has its own, and they may "
                                "differ.",
+            },
+            {
+                "name": "statement",
+                "load_object": _SOURCE,
+                "required": False,
+                "required_when": {_LOAD_SHAPE: [_QUERY, _QUERY_TO_FILE]},
+                "mode_membership": {_LOAD_SHAPE: [_QUERY, _QUERY_TO_FILE]},
+                # SQL, SAID BY THE DECLARATION. A surface gives it a code
+                # editor because the value IS code -- the same way every other
+                # value_type decides its control, and without anything
+                # recognising a parameter called "statement". `sql-file` stays
+                # a path: it is the alternate transport for this text, not the
+                # text itself.
+                "value_type": "sql",
+                "placeholder": "select ... from ...",
+                "description": "The SOURCE query, whose result is loaded.",
+            },
+            {
+                "name": "sql-file",
+                "load_object": _SOURCE,
+                "required": False,
+                "required_when": {_LOAD_SHAPE: [_QUERY_FILE]},
+                "mode_membership": {_LOAD_SHAPE: [_QUERY_FILE]},
+                "value_type": "path",
+                "placeholder": "/path/to/query.sql",
+                "description": "A file holding the SOURCE query, instead of "
+                               "giving it inline.",
             },
             {
                 "name": "out-file",
