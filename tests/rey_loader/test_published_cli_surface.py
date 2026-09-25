@@ -44,8 +44,11 @@ CONSUMED: dict[str, set[str]] = {
     # and are shared with the direct file shape; `out-file` is a FILE
     # destination and shares nothing, because a file has no connection and
     # nothing to create.
+    # THREE OBJECTS, not two ends: `transform` and `transform-file` carry the
+    # declaration the middle one applies, and neither belongs to either end.
     "load": {"file", "data-source", "statement", "sql-file",
-             "source-connection", "table", "connection", "create",
+             "source-connection", "transform", "transform-file",
+             "table", "connection", "create",
              "out-file", "file-type", "dry-run"},
     "all": {"dry-run"},
     "sql": {"source", "dry-run"},
@@ -118,7 +121,8 @@ class TestTheRecipesInvariants:
         }
         assert declared == {
             "workflow", "source", "file", "data-source", "statement",
-            "sql-file", "source-connection", "table", "connection", "create",
+            "sql-file", "source-connection", "transform", "transform-file",
+            "table", "connection", "create",
             "out-file", "file-type", "dry-run",
         }
 
@@ -222,6 +226,14 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
             # be reached through and nothing to create, and its format comes
             # from its own suffix.
             "out-file": {"query_to_file"},
+            # THE TRANSFORM IS OPTIONAL IN EVERY SHAPE THAT HAS ONE, and is
+            # not a mode of its own. It is not an alternative to a source or a
+            # destination -- it is the third object, and a load either states
+            # one or asks for its records as they are. Only `discovery` and
+            # `configured` are absent: a configured definition declares its
+            # own, and discovery loads every definition.
+            "transform": {"direct", "query", "query_file", "query_to_file"},
+            "transform-file": {"direct", "query", "query_file", "query_to_file"},
             # A statement has no format, so this stays file-only.
             "file-type": {"direct"},
         }
@@ -243,7 +255,8 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
         }
         assert unconfigured == {
             name.replace("_", "-") for name in _UNCONFIGURED_ONLY_OPTIONS
-        } | {"statement", "sql-file", "source-connection", "out-file"}
+        } | {"statement", "sql-file", "source-connection", "out-file",
+             "transform", "transform-file"}
 
         # And the file-only one is offered to the file shape alone.
         for name in _FILE_ONLY_OPTIONS:

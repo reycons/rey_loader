@@ -73,7 +73,7 @@ _DRY_RUN: dict[str, Any] = {
 #: which is why the source options say which end they belong to and the
 #: destination ones keep the names they already had.
 
-#: Which END of the movement a parameter describes.
+#: Which of the load's three OBJECTS a parameter configures.
 #:
 #: A load has two, and after the fourth shape they may be different databases.
 #: The shape a parameter belongs to is `mode_membership` and where it is drawn
@@ -90,7 +90,11 @@ _DRY_RUN: dict[str, Any] = {
 #: destination would widen this field from "which side is this" to "roughly
 #: destination-related", and the first thing that costs is the ability to see
 #: an incomplete declaration for what it is.
+#: The three objects a load composes. A parameter says which one it
+#: configures, and a surface draws one per object -- so a transform is not an
+#: afterthought beside two ends, it is the middle of the three.
 _SOURCE = "source"
+_TRANSFORM = "transform"
 _DESTINATION = "destination"
 
 _LOAD_SHAPE = "load_shape"
@@ -197,7 +201,7 @@ _COMMANDS: list[dict[str, Any]] = [
         "parameters": [
             {
                 "name": "file",
-                "endpoint": _SOURCE,
+                "load_object": _SOURCE,
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_CONFIGURED, _DIRECT]},
                 "mode_membership": {_LOAD_SHAPE: [_CONFIGURED, _DIRECT]},
@@ -224,7 +228,7 @@ _COMMANDS: list[dict[str, Any]] = [
             },
             {
                 "name": "statement",
-                "endpoint": _SOURCE,
+                "load_object": _SOURCE,
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_QUERY, _QUERY_TO_FILE]},
                 "mode_membership": {_LOAD_SHAPE: [_QUERY, _QUERY_TO_FILE]},
@@ -234,7 +238,7 @@ _COMMANDS: list[dict[str, Any]] = [
             },
             {
                 "name": "sql-file",
-                "endpoint": _SOURCE,
+                "load_object": _SOURCE,
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_QUERY_FILE]},
                 "mode_membership": {_LOAD_SHAPE: [_QUERY_FILE]},
@@ -245,7 +249,7 @@ _COMMANDS: list[dict[str, Any]] = [
             },
             {
                 "name": "source-connection",
-                "endpoint": _SOURCE,
+                "load_object": _SOURCE,
                 "required": False,
                 "required_when": {
                     _LOAD_SHAPE: [_QUERY, _QUERY_FILE, _QUERY_TO_FILE],
@@ -261,7 +265,7 @@ _COMMANDS: list[dict[str, Any]] = [
             },
             {
                 "name": "out-file",
-                "endpoint": _DESTINATION,
+                "load_object": _DESTINATION,
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_QUERY_TO_FILE]},
                 "mode_membership": {_LOAD_SHAPE: [_QUERY_TO_FILE]},
@@ -275,8 +279,37 @@ _COMMANDS: list[dict[str, Any]] = [
                                "format, and it needs no connection.",
             },
             {
+                "name": "transform",
+                "load_object": _TRANSFORM,
+                "required": False,
+                "mode_membership": {
+                    _LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE, _QUERY_TO_FILE],
+                },
+                "value_type": "string",
+                "placeholder": "columns: [{name: ..., source: ...}]",
+                # OPTIONAL IN EVERY SHAPE THAT HAS ONE, and not a mode of its
+                # own. A transform is not an alternative to a source or a
+                # destination -- it is the third object, and a load either
+                # states one or asks for its records as they are.
+                "description": "What each output column is and where it "
+                               "comes from. Omit it to load the rows "
+                               "unchanged.",
+            },
+            {
+                "name": "transform-file",
+                "load_object": _TRANSFORM,
+                "required": False,
+                "mode_membership": {
+                    _LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE, _QUERY_TO_FILE],
+                },
+                "value_type": "path",
+                "placeholder": "/path/to/transform.yaml",
+                "description": "A file holding that declaration, instead of "
+                               "giving it inline.",
+            },
+            {
                 "name": "table",
-                "endpoint": _DESTINATION,
+                "load_object": _DESTINATION,
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
                 "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
@@ -286,7 +319,7 @@ _COMMANDS: list[dict[str, Any]] = [
             },
             {
                 "name": "connection",
-                "endpoint": _DESTINATION,
+                "load_object": _DESTINATION,
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
                 "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
@@ -297,7 +330,7 @@ _COMMANDS: list[dict[str, Any]] = [
             },
             {
                 "name": "create",
-                "endpoint": _DESTINATION,
+                "load_object": _DESTINATION,
                 "required": False,
                 "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
                 "value_type": "flag",
@@ -306,7 +339,7 @@ _COMMANDS: list[dict[str, Any]] = [
             },
             {
                 "name": "file-type",
-                "endpoint": _SOURCE,
+                "load_object": _SOURCE,
                 "required": False,
                 "mode_membership": {_LOAD_SHAPE: [_DIRECT]},
                 "value_type": "choice",

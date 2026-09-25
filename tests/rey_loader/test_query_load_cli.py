@@ -33,7 +33,7 @@ def _args(**kwargs) -> argparse.Namespace:
     base = dict(command="load", file="", data_source="", table="",
                 connection="", create=False, file_type="",
                 statement="", source_connection="", sql_file="",
-                out_file="")
+                out_file="", transform="", transform_file="")
     base.update(kwargs)
     return argparse.Namespace(**base)
 
@@ -285,10 +285,11 @@ class TestAQueryMayGoToAFile:
         """One branch, and the table shape is not consulted."""
         seen: dict = {}
 
-        def _capture(_ctx, _log, statement, source_connection, out_file):
+        def _capture(_ctx, _log, statement, source_connection, out_file,
+                     **kwargs):
             seen.update(statement=statement,
                         source_connection=source_connection,
-                        out_file=out_file)
+                        out_file=out_file, **kwargs)
             return 4
 
         with patch.object(rey_loader_main, "run_load_query_to_file", _capture), \
@@ -302,7 +303,10 @@ class TestAQueryMayGoToAFile:
 
         assert seen == {"statement": _STATEMENT,
                         "source_connection": "warehouse",
-                        "out_file": "/tmp/rows.csv"}
+                        "out_file": "/tmp/rows.csv",
+                        # No declaration given, so none is carried: the load
+                        # writes the rows as the query returned them.
+                        "transform": None}
         assert not any(
             (to_table.called, direct.called, one.called, every.called)
         )

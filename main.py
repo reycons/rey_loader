@@ -22,6 +22,9 @@ from datetime import datetime
 from pathlib import Path
 
 # Pre-parse --config-path / --config-dir and call load_dotenv before other imports.
+from typing import Any
+
+from rey_lib.config.config_utils import parse_yaml
 from rey_lib.config.cli import preparse_config_args
 preparse_config_args()
 
@@ -196,7 +199,7 @@ def _execute_app_command(
             # through, which refuses by name rather than guessing.
             run_load_query_to_file(
                 ctx, run_log, _statement_from(args), args.source_connection,
-                args.out_file,
+                args.out_file, transform=_transform_from(args),
             )
         elif args.statement or args.sql_file:
             # DIRECT, a query to a TABLE. Two connections: the statement runs
@@ -206,6 +209,7 @@ def _execute_app_command(
                 ctx, run_log, _statement_from(args), args.source_connection,
                 args.table, args.connection,
                 create_destination=args.create,
+                transform=_transform_from(args),
             )
         elif args.file and args.table:
             # DIRECT: the arguments say everything. No data source, no
@@ -311,6 +315,61 @@ def _statement_from(args: argparse.Namespace) -> str:
     return statement
 
 
+def _transform_from(args: argparse.Namespace) -> Any:
+    """The transform declaration, however it was given.
+
+    **THE SIBLING OF ``_statement_from``, and for the same reason.** A
+    declaration long enough to be worth reviewing cannot be pasted onto a
+    command line and cannot be read in a diff, so it may come from a file --
+    and nothing below this function learns which form was used.
+
+    Parsed with ``parse_yaml``, so an operator writes the same shape a
+    ``transforms:`` block holds. YAML is a superset of JSON, which means a
+    caller that would rather send JSON needs no second reader.
+
+    Args:
+        args: The parsed invocation. The guard refuses both forms together.
+
+    Returns:
+        The declaration, or None where none was given. **None is not an empty
+        declaration**: one means the rows are loaded as they came, the other
+        would mean a load that produces no columns at all.
+
+    Raises:
+        ReyLoaderError: When the named file does not exist or holds nothing,
+            or when what was given is not a declaration. An empty file is a
+            mistyped path or an unsaved editor, and letting it through would
+            silently load untransformed rows.
+    """
+    if args.transform_file:
+        path = Path(args.transform_file)
+        if not path.is_file():
+            raise ReyLoaderError(f"load --transform-file: no such file: {path}")
+        text = read_text_file(path)
+        named = f"--transform-file {path}"
+    elif args.transform:
+        text = str(args.transform)
+        named = "--transform"
+    else:
+        return None
+
+    if not text.strip():
+        raise ReyLoaderError(f"load {named} holds no declaration.")
+
+    try:
+        declared = parse_yaml(text)
+    except Exception as exc:                      # the parser names the fault
+        raise ReyLoaderError(f"load {named} could not be read: {exc}") from exc
+
+    if not isinstance(declared, dict) or not declared.get("columns"):
+        raise ReyLoaderError(
+            f"load {named} declares no columns. A transform says what each "
+            "output column is and where it comes from; one with none would "
+            "produce records with no fields."
+        )
+    return declared
+
+
 def _check_load_arguments(args: argparse.Namespace) -> None:
     """Refuse an incomplete or mixed `load` invocation, by name.
 
@@ -348,8 +407,13 @@ def _check_load_arguments(args: argparse.Namespace) -> None:
             f"--table and --connection instead."
         )
 
-    # TWO WAYS OF SAYING ONE THING. --sql-file carries the same statement
-    # --statement does; giving both leaves nothing to decide between them.
+    # TWO WAYS OF SAYING ONE THING, twice over. Each pair carries one value
+    # and giving both leaves nothing to decide between them.
+    if args.transform and args.transform_file:
+        raise ReyLoaderError(
+            "--transform and --transform-file both give the TRANSFORM "
+            "declaration. Drop whichever you did not mean."
+        )
     if args.statement and args.sql_file:
         raise ReyLoaderError(
             "--statement and --sql-file both give the SOURCE statement. Drop "
@@ -538,6 +602,21 @@ def _parse_args() -> argparse.Namespace:
         help="With load --statement: the configured connection the SOURCE "
              "statement runs on. The destination has its own --connection, "
              "and the two may differ.",
+    )
+    parser.add_argument(
+        "--transform",
+        default="",
+        help="With load: a transform declaration, inline. Its columns name "
+             "where each value comes from, what the output column is called, "
+             "and what is applied on the way.",
+    )
+    parser.add_argument(
+        "--transform-file",
+        dest="transform_file",
+        default="",
+        help="With load: a file holding the transform declaration, instead "
+             "of giving it inline with --transform. The same declaration, "
+             "from somewhere it can be version-controlled and reviewed.",
     )
     parser.add_argument(
         "--out-file",

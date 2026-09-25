@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from typing import Any
+
 from rey_lib.config.config_utils import Namespace
 from rey_lib.load.load_operation import load_file_to_table as _load_file_to_table
 from rey_lib.load.load_operation import load_one as _load_one
@@ -121,6 +123,7 @@ def run_load_query(
     connection: str,
     *,
     create_destination: bool = False,
+    transform: Any = None,
 ) -> int:
     """Load what one statement returns into one named table.
 
@@ -148,6 +151,9 @@ def run_load_query(
         Name of the configured connection the DESTINATION lives on.
     create_destination : bool
         Whether an absent table may be created from the records.
+    transform : Any
+        A transform declaration. Absent means the rows are loaded as the
+        query returned them.
 
     Returns
     -------
@@ -169,7 +175,7 @@ def run_load_query(
                  source_connection, destination, connection)
     total = _load_query_to_table(
         ctx, run_log, statement, source_connection, destination, connection,
-        create_destination=create_destination,
+        create_destination=create_destination, transform=transform,
     )
     _logger.info("Load complete: %d row(s) loaded.", total)
     return total
@@ -181,6 +187,8 @@ def run_load_query_to_file(
     statement: str,
     source_connection: str,
     out_file: str,
+    *,
+    transform: Any = None,
 ) -> int:
     """Load what one statement returns into one file.
 
@@ -204,6 +212,9 @@ def run_load_query_to_file(
         Name of the configured connection the statement runs on.
     out_file : str
         Where the rows go. Its suffix names the format.
+    transform : Any
+        A transform declaration. Absent means the rows are written as the
+        query returned them.
 
     Returns
     -------
@@ -222,6 +233,7 @@ def run_load_query_to_file(
                  source_connection, out_file)
     total = _load_query_to_file(
         ctx, run_log, statement, source_connection, out_file,
+        transform=transform,
     )
     _logger.info("Load complete: %d row(s) written.", total)
     return total
