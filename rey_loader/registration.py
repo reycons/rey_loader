@@ -357,6 +357,35 @@ _COMMANDS: list[dict[str, Any]] = [
                 "description": "Create the destination from the source when "
                                "it does not exist.",
             },
+            # THE OTHER TWO DISPOSITIONS TOWARD A DESTINATION, and the three
+            # exclude each other: `create` acts on one that is ABSENT, these on
+            # one that is there. A reader naming two has not said what they
+            # want, which `_check_load_arguments` refuses rather than guesses.
+            {
+                "name": "replace",
+                "load_object": _DESTINATION,
+                "required": False,
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
+                "value_type": "flag",
+                "description": "Replace the destination's contents with what "
+                               "this load carries. Its rows are removed first; "
+                               "the table, its constraints and its grants are "
+                               "not touched.",
+            },
+            {
+                "name": "append",
+                "load_object": _DESTINATION,
+                "required": False,
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
+                "value_type": "flag",
+                # NAMING WHAT ALREADY HAPPENS. A load told nothing adds to its
+                # destination and always has, so this changes no behaviour --
+                # it lets a reader SAY so, and lets a surface show which mode is
+                # in force rather than three empty controls over a load that is
+                # going to append anyway.
+                "description": "Add to the destination's contents. This is "
+                               "what a load does when told nothing.",
+            },
             {
                 "name": "file-type",
                 "load_object": _SOURCE,

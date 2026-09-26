@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from rey_loader.registration import get_registration
 
 
@@ -48,7 +50,7 @@ CONSUMED: dict[str, set[str]] = {
     # declaration the middle one applies, and neither belongs to either end.
     "load": {"file", "data-source", "statement", "sql-file",
              "source-connection", "transform", "transform-file",
-             "table", "connection", "create",
+             "table", "connection", "create", "replace", "append",
              "out-file", "file-type", "dry-run"},
     "all": {"dry-run"},
     "sql": {"source", "dry-run"},
@@ -85,7 +87,8 @@ class TestEachCommandDeclaresWhatItReads:
 
     def test_a_workflow_run_is_not_offered_a_destination(self) -> None:
         offered = set(parameters("run-workflow"))
-        assert not offered & {"table", "connection", "create", "file-type",
+        assert not offered & {"table", "connection", "create", "replace",
+                              "append", "file-type",
                               "data-source", "file", "statement",
                               "source-connection"}
 
@@ -122,7 +125,7 @@ class TestTheRecipesInvariants:
         assert declared == {
             "workflow", "source", "file", "data-source", "statement",
             "sql-file", "source-connection", "transform", "transform-file",
-            "table", "connection", "create",
+            "table", "connection", "create", "replace", "append",
             "out-file", "file-type", "dry-run",
         }
 
@@ -258,6 +261,11 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
             "table": {"direct", "query", "query_file"},
             "connection": {"direct", "query", "query_file"},
             "create": {"direct", "query", "query_file"},
+            # The three dispositions toward a destination share its shapes:
+            # `create` acts on an absent one, `replace` and `append` on one
+            # that is there, and a load names exactly one of them.
+            "replace": {"direct", "query", "query_file"},
+            "append": {"direct", "query", "query_file"},
             # A FILE destination shares NONE of those, and that is the shape
             # of the fact rather than an omission: a file has no connection to
             # be reached through and nothing to create, and its format comes
@@ -359,3 +367,49 @@ class TestExecutionModePlacement:
             if one.get("placement") == "action_bar"
         }
         assert {name for _command, name in placed} == {"dry-run"}
+
+
+class TestADestinationHasOneMode:
+    """`create`, `replace` and `append` exclude each other.
+
+    `create` acts on a destination that is ABSENT; the other two act on one
+    that is there. No pair of them describes a coherent load, so naming two is
+    refused rather than resolved by precedence -- a load that silently did the
+    other thing is the outcome this prevents.
+    """
+
+    @staticmethod
+    def _args(**kwargs):
+        import argparse
+        base = dict(command="load", file="f", data_source="", table="s.t",
+                    connection="c", create=False, replace=False, append=False,
+                    file_type="", statement="", source_connection="",
+                    sql_file="", out_file="", transform="", transform_file="")
+        base.update(kwargs)
+        return argparse.Namespace(**base)
+
+    def test_one_mode_is_accepted(self) -> None:
+        from main import _check_load_arguments
+
+        for mode in ("create", "replace", "append"):
+            _check_load_arguments(self._args(**{mode: True}))
+
+    def test_naming_none_is_accepted_and_means_append(self) -> None:
+        """An undeclared load is what every existing invocation is."""
+        from main import _check_load_arguments
+
+        _check_load_arguments(self._args())
+
+    def test_two_modes_are_refused_by_name(self) -> None:
+        from main import ReyLoaderError, _check_load_arguments
+
+        for first, second in (
+            ("create", "replace"), ("create", "append"), ("replace", "append"),
+        ):
+            with pytest.raises(ReyLoaderError) as raised:
+                _check_load_arguments(
+                    self._args(**{first: True, second: True})
+                )
+
+            message = str(raised.value)
+            assert f"--{first}" in message and f"--{second}" in message

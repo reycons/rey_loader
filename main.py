@@ -209,6 +209,7 @@ def _execute_app_command(
                 ctx, run_log, _statement_from(args), args.source_connection,
                 args.table, args.connection,
                 create_destination=args.create,
+                replace_destination=args.replace,
                 transform=_transform_from(args),
             )
         elif args.file and args.table:
@@ -216,7 +217,8 @@ def _execute_app_command(
             # configured definition, nothing manufactured to stand in for one.
             run_load_direct(
                 ctx, run_log, Path(args.file), args.table, args.connection,
-                create_destination=args.create, file_type=args.file_type,
+                create_destination=args.create,
+                replace_destination=args.replace, file_type=args.file_type,
             )
         elif args.file:
             # CONFIGURED, one named file. The definition still decides the
@@ -264,6 +266,8 @@ _UNCONFIGURED_ONLY_OPTIONS: dict[str, str] = {
     "table":      "load.destination_table",
     "connection": "load.connection",
     "create":     "load.create_destination_table",
+    "replace":    "load.replace_destination_contents",
+    "append":     "load.replace_destination_contents",
     "file_type":  "transforms[].file_type",
 }
 
@@ -391,6 +395,24 @@ def _check_load_arguments(args: argparse.Namespace) -> None:
         ReyLoaderError: Naming the option that is missing or does not belong,
             and which END it belongs to.
     """
+    # THE DESTINATION HAS ONE MODE, and the three ways of saying so exclude
+    # each other. Create acts on an ABSENT destination and the other two on an
+    # existing one, so no pair of them describes a coherent load: a reader
+    # naming two has not said what they want, and guessing which they meant is
+    # how a load silently does the other thing.
+    modes = [
+        name for name in ("create", "replace", "append")
+        if getattr(args, name, False)
+    ]
+    if len(modes) > 1:
+        named = ", ".join(f"--{one}" for one in modes)
+        raise ReyLoaderError(
+            f"load: {named} were given together, and a destination has one "
+            "mode. --create makes a table that is not there, --replace puts "
+            "these rows in place of what is in one that is, and --append adds "
+            "to it. Name the one that is meant."
+        )
+
     unconfigured_given = [
         name for name in _UNCONFIGURED_ONLY_OPTIONS if getattr(args, name, None)
     ]
@@ -580,6 +602,22 @@ def _parse_args() -> argparse.Namespace:
         help="With load --file --table: create the destination from the "
              "file when it does not exist. A configured load declares this "
              "in its own 'load:' block instead.",
+    )
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        default=False,
+        help="With load --file --table: replace the destination's contents "
+             "with what this load carries. Its rows are removed first; the "
+             "table, its constraints and its grants are not touched.",
+    )
+    parser.add_argument(
+        "--append",
+        action="store_true",
+        default=False,
+        help="With load --file --table: add to the destination's contents. "
+             "This is what a load does when told nothing, and naming it says "
+             "so rather than changing it.",
     )
     parser.add_argument(
         "--statement",
