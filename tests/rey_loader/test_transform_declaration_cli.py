@@ -36,7 +36,7 @@ columns:
 
 def _args(**kwargs) -> argparse.Namespace:
     base = dict(command="load", file="", data_source="", table="",
-                connection="", create=False, replace=False, append=False, file_type="",
+                connection="", create=False, replace=False, recreate=False, append=False, file_type="",
                 statement="", source_connection="", sql_file="",
                 out_file="", transform="", transform_file="")
     base.update(kwargs)

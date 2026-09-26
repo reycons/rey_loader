@@ -210,6 +210,7 @@ def _execute_app_command(
                 args.table, args.connection,
                 create_destination=args.create,
                 replace_destination=args.replace,
+                recreate_destination=args.recreate,
                 transform=_transform_from(args),
             )
         elif args.file and args.table:
@@ -218,7 +219,8 @@ def _execute_app_command(
             run_load_direct(
                 ctx, run_log, Path(args.file), args.table, args.connection,
                 create_destination=args.create,
-                replace_destination=args.replace, file_type=args.file_type,
+                replace_destination=args.replace,
+                recreate_destination=args.recreate, file_type=args.file_type,
             )
         elif args.file:
             # CONFIGURED, one named file. The definition still decides the
@@ -267,6 +269,7 @@ _UNCONFIGURED_ONLY_OPTIONS: dict[str, str] = {
     "connection": "load.connection",
     "create":     "load.create_destination_table",
     "replace":    "load.replace_destination_contents",
+    "recreate":   "load.recreate_destination",
     "append":     "load.replace_destination_contents",
     "file_type":  "transforms[].file_type",
 }
@@ -401,7 +404,7 @@ def _check_load_arguments(args: argparse.Namespace) -> None:
     # naming two has not said what they want, and guessing which they meant is
     # how a load silently does the other thing.
     modes = [
-        name for name in ("create", "replace", "append")
+        name for name in ("create", "replace", "recreate", "append")
         if getattr(args, name, False)
     ]
     if len(modes) > 1:
@@ -409,8 +412,9 @@ def _check_load_arguments(args: argparse.Namespace) -> None:
         raise ReyLoaderError(
             f"load: {named} were given together, and a destination has one "
             "mode. --create makes a table that is not there, --replace puts "
-            "these rows in place of what is in one that is, and --append adds "
-            "to it. Name the one that is meant."
+            "these rows in place of what is in one that is, --recreate "
+            "destroys that table and builds it again from them, and --append "
+            "adds to it. Name the one that is meant."
         )
 
     unconfigured_given = [
@@ -610,6 +614,16 @@ def _parse_args() -> argparse.Namespace:
         help="With load --file --table: replace the destination's contents "
              "with what this load carries. Its rows are removed first; the "
              "table, its constraints and its grants are not touched.",
+    )
+    parser.add_argument(
+        "--recreate",
+        action="store_true",
+        default=False,
+        help="With load --file --table: destroy the destination and build it "
+             "again from what this load carries. The table is dropped and "
+             "created, so its indexes, constraints and triggers go with it "
+             "and are not rebuilt. Use --replace to keep the table and "
+             "change only its rows.",
     )
     parser.add_argument(
         "--append",

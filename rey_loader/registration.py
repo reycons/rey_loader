@@ -373,6 +373,21 @@ _COMMANDS: list[dict[str, Any]] = [
                                "not touched.",
             },
             {
+                "name": "recreate",
+                "load_object": _DESTINATION,
+                "required": False,
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
+                "value_type": "flag",
+                # THE ONE THAT IS DESTRUCTIVE AT SCHEMA LEVEL, and it is said
+                # here rather than discovered: `replace` keeps the table it
+                # empties, this does not keep the table at all.
+                "description": "Destroy the destination and build it again "
+                               "from what this load carries. The table is "
+                               "dropped and created, so its indexes, "
+                               "constraints and triggers go with it and are "
+                               "not rebuilt.",
+            },
+            {
                 "name": "append",
                 "load_object": _DESTINATION,
                 "required": False,

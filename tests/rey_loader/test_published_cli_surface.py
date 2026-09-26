@@ -50,7 +50,7 @@ CONSUMED: dict[str, set[str]] = {
     # declaration the middle one applies, and neither belongs to either end.
     "load": {"file", "data-source", "statement", "sql-file",
              "source-connection", "transform", "transform-file",
-             "table", "connection", "create", "replace", "append",
+             "table", "connection", "create", "replace", "recreate", "append",
              "out-file", "file-type", "dry-run"},
     "all": {"dry-run"},
     "sql": {"source", "dry-run"},
@@ -88,7 +88,7 @@ class TestEachCommandDeclaresWhatItReads:
     def test_a_workflow_run_is_not_offered_a_destination(self) -> None:
         offered = set(parameters("run-workflow"))
         assert not offered & {"table", "connection", "create", "replace",
-                              "append", "file-type",
+                              "recreate", "append", "file-type",
                               "data-source", "file", "statement",
                               "source-connection"}
 
@@ -125,7 +125,7 @@ class TestTheRecipesInvariants:
         assert declared == {
             "workflow", "source", "file", "data-source", "statement",
             "sql-file", "source-connection", "transform", "transform-file",
-            "table", "connection", "create", "replace", "append",
+            "table", "connection", "create", "replace", "recreate", "append",
             "out-file", "file-type", "dry-run",
         }
 
@@ -261,10 +261,13 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
             "table": {"direct", "query", "query_file"},
             "connection": {"direct", "query", "query_file"},
             "create": {"direct", "query", "query_file"},
-            # The three dispositions toward a destination share its shapes:
-            # `create` acts on an absent one, `replace` and `append` on one
-            # that is there, and a load names exactly one of them.
+            # The four dispositions toward a destination share its shapes:
+            # `create` acts on an absent one, the other three on one that is
+            # there, and a load names exactly one of them. `recreate` is the
+            # only one that does not keep the table -- it drops it and builds
+            # it again -- which is a different act, not a stronger `replace`.
             "replace": {"direct", "query", "query_file"},
+            "recreate": {"direct", "query", "query_file"},
             "append": {"direct", "query", "query_file"},
             # A FILE destination shares NONE of those, and that is the shape
             # of the fact rather than an omission: a file has no connection to
@@ -382,7 +385,7 @@ class TestADestinationHasOneMode:
     def _args(**kwargs):
         import argparse
         base = dict(command="load", file="f", data_source="", table="s.t",
-                    connection="c", create=False, replace=False, append=False,
+                    connection="c", create=False, replace=False, recreate=False, append=False,
                     file_type="", statement="", source_connection="",
                     sql_file="", out_file="", transform="", transform_file="")
         base.update(kwargs)
