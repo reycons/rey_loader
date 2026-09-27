@@ -179,13 +179,21 @@ class TestTheDirectEntryPoint:
         source.write_text('{"a": 1}\n', encoding="utf-8")
         seen: dict = {}
 
-        def _capture(_ctx, _log, _conn, path, destination, **kwargs):
+        # THE LIBRARY'S SIGNATURE, in its current order:
+        #   (ctx, run_log, file_path, destination, connection, **kwargs)
+        # This capture was written for an older one that took a connection
+        # HANDLE third, so its names were shifted by one and `destination` was
+        # receiving the connection. The assertions below passed only because the
+        # test never ran -- it raised AttributeError on the patch beneath it.
+        def _capture(_ctx, _log, path, destination, _connection, **kwargs):
             seen.update(path=path, destination=destination, **kwargs)
             return 3
 
-        with patch.object(load_module, "_load_file_to_table", _capture), \
-             patch.object(load_module, "shared_connection",
-                          lambda *_a: _NS(handle=lambda: object())):
+        # NO CONNECTION PATCH. run_load_direct passes the connection NAME and
+        # opens nothing; the library builds its target from it. Patching a
+        # `shared_connection` this module does not have is what made both tests
+        # in this class raise AttributeError instead of asserting anything.
+        with patch.object(load_module, "_load_file_to_table", _capture):
             total = load_module.run_load_direct(
                 _NS(), run_log, source, "testing.asset", "rey_loader",
                 create_destination=True, file_type="JSONL",
@@ -200,10 +208,15 @@ class TestTheDirectEntryPoint:
         self, tmp_path: Path, run_log
     ) -> None:
         """Opening a database to discover the file is absent is wasted work."""
+        # GUARDED AT THE SEAM THAT EXISTS. run_load_direct resolves no connection
+        # itself -- it hands the library a connection NAME and the library opens
+        # one from the target it builds. So "no connection for a missing file" is
+        # proved by the library never being reached at all, which is the stronger
+        # statement and the one this module can actually make.
         def _never(*_a, **_k):
-            raise AssertionError("resolved a connection for a missing file")
+            raise AssertionError("reached the library for a missing file")
 
-        with patch.object(load_module, "shared_connection", _never):
+        with patch.object(load_module, "_load_file_to_table", _never):
             with pytest.raises(ReyLoaderError) as raised:
                 load_module.run_load_direct(
                     _NS(), run_log, tmp_path / "gone.jsonl", "s.t", "c",
