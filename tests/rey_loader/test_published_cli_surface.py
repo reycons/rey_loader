@@ -51,7 +51,12 @@ CONSUMED: dict[str, set[str]] = {
     "load": {"file", "data-source", "statement", "sql-file",
              "source-connection", "transform", "transform-file",
              "table", "connection", "create", "replace", "recreate", "append",
-             "out-file", "file-type", "dry-run"},
+             "out-file", "file-type", "dry-run",
+             # The governed file, by identity. Three because they are three
+             # different questions -- which file, which of its states, and
+             # which scope is being worked within -- and never one field
+             # carrying whichever the caller happened to have.
+             "file-manifest-id", "file-mutation-id", "file-type-id"},
     "all": {"dry-run"},
     "sql": {"source", "dry-run"},
 }
@@ -127,6 +132,7 @@ class TestTheRecipesInvariants:
             "sql-file", "source-connection", "transform", "transform-file",
             "table", "connection", "create", "replace", "recreate", "append",
             "out-file", "file-type", "dry-run",
+            "file-manifest-id", "file-mutation-id", "file-type-id",
         }
 
     def test_one_declaration_style_only(self) -> None:
@@ -200,18 +206,18 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
     def _group() -> dict[str, Any]:
         return commands()["load"]["mode_groups"][0]
 
-    def test_six_shapes_are_declared(self) -> None:
+    def test_seven_shapes_are_declared(self) -> None:
         assert [one["name"] for one in self._group()["modes"]] == [
             "discovery", "configured", "direct", "query", "query_file",
-            "query_to_file",
+            "query_to_file", "manifest",
         ]
 
     def test_every_shape_declares_the_movement_it_is(self) -> None:
-        """Source, arrow, destination -- so the six are told apart by picture.
+        """Source, arrow, destination -- so they are told apart by picture.
 
-        ALL SIX OR NONE. A surface paints marks only where every alternative
+        ALL OR NONE. A surface paints marks only where every alternative
         declared some; a strip of marks and words is two controls sharing a
-        border. So one shape omitting its icons silently returns all six to a
+        border. So one shape omitting its icons silently returns them all to a
         dropdown, which is why this asserts the set rather than a sample.
         """
         assert {one["name"]: one["icons"] for one in self._group()["modes"]} == {
@@ -221,6 +227,9 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
             "query": ["database", "next", "table"],
             "query_file": ["contract", "next", "table"],
             "query_to_file": ["database", "next", "csv"],
+            # A governed file on the left, because what is named is a file the
+            # estate already holds rather than a location.
+            "manifest": ["files", "next", "table"],
         }
 
     def test_every_shape_still_says_in_words_what_it_is(self) -> None:
@@ -258,17 +267,17 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
             "source-connection": {"query", "query_file", "query_to_file"},
             # A DATABASE destination is shared: a query load names where its
             # rows go exactly as a direct file load does.
-            "table": {"direct", "query", "query_file"},
-            "connection": {"direct", "query", "query_file"},
-            "create": {"direct", "query", "query_file"},
+            "table": {"direct", "manifest", "query", "query_file"},
+            "connection": {"direct", "manifest", "query", "query_file"},
+            "create": {"direct", "manifest", "query", "query_file"},
             # The four dispositions toward a destination share its shapes:
             # `create` acts on an absent one, the other three on one that is
             # there, and a load names exactly one of them. `recreate` is the
             # only one that does not keep the table -- it drops it and builds
             # it again -- which is a different act, not a stronger `replace`.
-            "replace": {"direct", "query", "query_file"},
-            "recreate": {"direct", "query", "query_file"},
-            "append": {"direct", "query", "query_file"},
+            "replace": {"direct", "manifest", "query", "query_file"},
+            "recreate": {"direct", "manifest", "query", "query_file"},
+            "append": {"direct", "manifest", "query", "query_file"},
             # A FILE destination shares NONE of those, and that is the shape
             # of the fact rather than an omission: a file has no connection to
             # be reached through and nothing to create, and its format comes
@@ -280,10 +289,20 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
             # one or asks for its records as they are. Only `discovery` and
             # `configured` are absent: a configured definition declares its
             # own, and discovery loads every definition.
-            "transform": {"direct", "query", "query_file", "query_to_file"},
-            "transform-file": {"direct", "query", "query_file", "query_to_file"},
+            "transform": {"direct", "manifest", "query", "query_file", "query_to_file"},
+            "transform-file": {"direct", "manifest", "query", "query_file", "query_to_file"},
             # A statement has no format, so this stays file-only.
             "file-type": {"direct"},
+            # THE GOVERNED FILE'S THREE, and they belong to `manifest` alone.
+            # Neither id is `required`: one of the two must name the file, and
+            # `required_when` maps a group to modes rather than saying "one of
+            # these two" -- so the pair rule is the source context contract's,
+            # which refuses a call supplying neither, by name.
+            "file-manifest-id": {"manifest"},
+            "file-mutation-id": {"manifest"},
+            # NEVER REQUIRED. It is the scope a caller INTENDS to work within,
+            # not a fact about the file: omitted, the file opens read-only.
+            "file-type-id": {"manifest"},
         }
 
     def test_the_unconfigured_options_are_exactly_the_declared_ones(self) -> None:
@@ -299,12 +318,16 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
             name for name, one in parameters("load").items()
             if set((one.get("mode_membership") or {}).get("load_shape", []))
             and set((one.get("mode_membership") or {})["load_shape"])
-            <= {"direct", "query", "query_file", "query_to_file"}
+            <= {"direct", "manifest", "query", "query_file", "query_to_file"}
         }
         assert unconfigured == {
             name.replace("_", "-") for name in _UNCONFIGURED_ONLY_OPTIONS
         } | {"statement", "sql-file", "source-connection", "out-file",
-             "transform", "transform-file"}
+             "transform", "transform-file",
+             # `manifest` is an unconfigured shape like the rest: a governed
+             # file is named by identity, not by a data_sources definition, so
+             # its three belong here with them.
+             "file-manifest-id", "file-mutation-id", "file-type-id"}
 
         # And the file-only one is offered to the file shape alone.
         for name in _FILE_ONLY_OPTIONS:

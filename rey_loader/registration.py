@@ -116,6 +116,20 @@ _QUERY = "query"
 #: learns which was used.
 _QUERY_FILE = "query_file"
 
+#: One file the CONTROL DATABASE already governs, named by its own identity.
+#:
+#: A MODE RATHER THAN A SECOND FIELD IN `direct`, for the reason `query_file` is
+#: one: `required_when` maps a group to modes and cannot say "one of these two".
+#: A manifest source is named by an identity and a direct source by a path, so
+#: with both in one mode neither could claim the requirement and a reader could
+#: press Run having named no source at all.
+#:
+#: It is not a second kind of load. The identity resolves to the same file a
+#: path would have reached, and everything downstream -- transform, destination
+#: -- is the same; what differs is that the estate's own knowledge of the file
+#: comes with it, which a path cannot carry.
+_MANIFEST = "manifest"
+
 #: A query whose destination is a FILE rather than a table.
 #:
 #: A SIXTH MODE rather than a destination choice inside the fourth, for the
@@ -209,6 +223,11 @@ _COMMANDS: list[dict[str, Any]] = [
                     {"name": _QUERY_TO_FILE,
                      "label": "One query, to a file",
                      "icons": ["database", "next", "csv"]},
+                    # The governed file's own mark on the left: what is named
+                    # is a file the estate already holds, not a location.
+                    {"name": _MANIFEST,
+                     "label": "One governed file, direct destination",
+                     "icons": ["files", "next", "table"]},
                 ],
             },
         ],
@@ -222,6 +241,58 @@ _COMMANDS: list[dict[str, Any]] = [
                 "value_type": "path",
                 "placeholder": "/path/to/file.csv",
                 "description": "The one file to load.",
+            },
+            # -- the governed file, by identity ---------------------------
+            #
+            # NEITHER IS `required`, AND THE PAIR IS THE REASON. One of the two
+            # must name the working file, and `required_when` maps a group to
+            # modes rather than expressing "one of these two" -- so marking
+            # either would refuse a caller that legitimately gave the other.
+            # The rule belongs to the pair, and the contract that reads them
+            # already enforces it: control.f_file_source_context_get refuses a
+            # call that supplies neither, by name.
+            {
+                "name": "file-manifest-id",
+                "load_object": _SOURCE,
+                "required": False,
+                "mode_membership": {_LOAD_SHAPE: [_MANIFEST]},
+                "value_type": "string",
+                "placeholder": "123",
+                "description": "The governed file to load, by its manifest "
+                               "identity. The current state of that file is "
+                               "resolved from it.",
+            },
+            {
+                "name": "file-mutation-id",
+                "load_object": _SOURCE,
+                "required": False,
+                "mode_membership": {_LOAD_SHAPE: [_MANIFEST]},
+                "value_type": "string",
+                "placeholder": "456",
+                # A SPECIFIC MATERIALISED STATE, which is why this exists
+                # beside the manifest rather than being derived from it. Given
+                # one, that exact state is the working file and the
+                # effective-mutation rule is not consulted.
+                "description": "One specific materialised state of a governed "
+                               "file. Use it to load that state rather than "
+                               "the file's current one.",
+            },
+            {
+                "name": "file-type-id",
+                "load_object": _SOURCE,
+                "required": False,
+                "mode_membership": {_LOAD_SHAPE: [_MANIFEST]},
+                "value_type": "string",
+                "placeholder": "4",
+                # NEVER REQUIRED, and never inferred. It is the GOVERNING
+                # scope a caller intends to work within, not a fact about the
+                # file: the manifest's own type is returned either way, and
+                # promoting it would let a type-level edit reach every file of
+                # that type when nobody chose to. Omitted means the file opens
+                # read-only.
+                "description": "The file type to work within, where type-level "
+                               "configuration is being edited. Omit it to open "
+                               "the file without a governing scope.",
             },
             {
                 "name": "data-source",
@@ -303,7 +374,7 @@ _COMMANDS: list[dict[str, Any]] = [
                 "load_object": _TRANSFORM,
                 "required": False,
                 "mode_membership": {
-                    _LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE, _QUERY_TO_FILE],
+                    _LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE, _QUERY_TO_FILE],
                 },
                 "value_type": "string",
                 "placeholder": "columns: [{name: ..., source: ...}]",
@@ -320,7 +391,7 @@ _COMMANDS: list[dict[str, Any]] = [
                 "load_object": _TRANSFORM,
                 "required": False,
                 "mode_membership": {
-                    _LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE, _QUERY_TO_FILE],
+                    _LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE, _QUERY_TO_FILE],
                 },
                 "value_type": "path",
                 "placeholder": "/path/to/transform.yaml",
@@ -331,8 +402,8 @@ _COMMANDS: list[dict[str, Any]] = [
                 "name": "table",
                 "load_object": _DESTINATION,
                 "required": False,
-                "required_when": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
-                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
+                "required_when": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
                 "value_type": "string",
                 "placeholder": "schema.table",
                 "description": "The destination, as schema.table.",
@@ -341,8 +412,8 @@ _COMMANDS: list[dict[str, Any]] = [
                 "name": "connection",
                 "load_object": _DESTINATION,
                 "required": False,
-                "required_when": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
-                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
+                "required_when": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
                 "value_type": "choice",
                 "possible_values_from": "connections",
                 "description": "The connection the DESTINATION is reached "
@@ -352,7 +423,7 @@ _COMMANDS: list[dict[str, Any]] = [
                 "name": "create",
                 "load_object": _DESTINATION,
                 "required": False,
-                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
                 "value_type": "flag",
                 "description": "Create the destination from the source when "
                                "it does not exist.",
@@ -365,7 +436,7 @@ _COMMANDS: list[dict[str, Any]] = [
                 "name": "replace",
                 "load_object": _DESTINATION,
                 "required": False,
-                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
                 "value_type": "flag",
                 "description": "Replace the destination's contents with what "
                                "this load carries. Its rows are removed first; "
@@ -376,7 +447,7 @@ _COMMANDS: list[dict[str, Any]] = [
                 "name": "recreate",
                 "load_object": _DESTINATION,
                 "required": False,
-                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
                 "value_type": "flag",
                 # THE ONE THAT IS DESTRUCTIVE AT SCHEMA LEVEL, and it is said
                 # here rather than discovered: `replace` keeps the table it
@@ -391,7 +462,7 @@ _COMMANDS: list[dict[str, Any]] = [
                 "name": "append",
                 "load_object": _DESTINATION,
                 "required": False,
-                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _QUERY, _QUERY_FILE]},
+                "mode_membership": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
                 "value_type": "flag",
                 # NAMING WHAT ALREADY HAPPENS. A load told nothing adds to its
                 # destination and always has, so this changes no behaviour --
