@@ -227,7 +227,7 @@ _COMMANDS: list[dict[str, Any]] = [
                     # is a file the estate already holds, not a location.
                     {"name": _MANIFEST,
                      "label": "One governed file, direct destination",
-                     "icons": ["files", "next", "table"]},
+                     "icons": ["map-code", "next", "table"]},
                 ],
             },
         ],

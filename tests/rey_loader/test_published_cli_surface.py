@@ -229,7 +229,7 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
             "query_to_file": ["database", "next", "csv"],
             # A governed file on the left, because what is named is a file the
             # estate already holds rather than a location.
-            "manifest": ["files", "next", "table"],
+            "manifest": ["map-code", "next", "table"],
         }
 
     def test_every_shape_still_says_in_words_what_it_is(self) -> None:
