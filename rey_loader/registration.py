@@ -257,7 +257,6 @@ _COMMANDS: list[dict[str, Any]] = [
                 "required": False,
                 "mode_membership": {_LOAD_SHAPE: [_MANIFEST]},
                 "value_type": "string",
-                "placeholder": "123",
                 "description": "The governed file to load, by its manifest "
                                "identity. The current state of that file is "
                                "resolved from it.",
@@ -268,7 +267,6 @@ _COMMANDS: list[dict[str, Any]] = [
                 "required": False,
                 "mode_membership": {_LOAD_SHAPE: [_MANIFEST]},
                 "value_type": "string",
-                "placeholder": "456",
                 # A SPECIFIC MATERIALISED STATE, which is why this exists
                 # beside the manifest rather than being derived from it. Given
                 # one, that exact state is the working file and the
@@ -283,7 +281,6 @@ _COMMANDS: list[dict[str, Any]] = [
                 "required": False,
                 "mode_membership": {_LOAD_SHAPE: [_MANIFEST]},
                 "value_type": "string",
-                "placeholder": "4",
                 # NEVER REQUIRED, and never inferred. It is the GOVERNING
                 # scope a caller intends to work within, not a fact about the
                 # file: the manifest's own type is returned either way, and
