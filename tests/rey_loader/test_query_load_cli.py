@@ -23,6 +23,10 @@ import pytest
 
 import main as rey_loader_main
 from rey_loader import load as load_module
+from rey_lib.db.query_source import QuerySource
+from rey_lib.errors.error_utils import ConfigError
+from rey_lib.files.data_file.base import DataFile
+from rey_lib.load.target import TARGET_KINDS
 from rey_loader.error_utils import ReyLoaderError
 
 _STATEMENT = "select a, b from orders"
@@ -62,77 +66,28 @@ class TestACompleteQueryInvocationIsAccepted:
         rey_loader_main._check_load_arguments(_whole(create=True))
 
 
-class TestEachEndIsProvedSeparately:
-    """A refusal names the end that is short, not merely that one is."""
+class TestEachEndIsProvedByItsObject:
+    """A short end is refused by ITS canonical object, which names itself."""
 
-    def test_a_statement_with_no_source_connection(self) -> None:
-        with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._check_load_arguments(
-                _args(statement=_STATEMENT, table="landing.records",
-                      connection="reporting")
-            )
-
-        message = str(raised.value)
-        assert "--source-connection" in message
-        assert "SOURCE" in message
-
-    def test_a_statement_with_no_destination_table(self) -> None:
-        """THE HOLE THIS TEST EXISTS FOR.
-
-        Both source options given, so the dispatch selects the query branch
-        and the wrapper is reached WITH NO DESTINATION. Each end being
-        internally consistent is not the same as the shape being whole.
-        """
-        with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._check_load_arguments(
-                _args(statement=_STATEMENT, source_connection="warehouse")
-            )
+    @pytest.mark.parametrize(("args", "named", "field"), [
+        (dict(statement=_STATEMENT, table="landing.records", connection="reporting"),
+         "Source", "source-connection"),
+        (dict(statement=_STATEMENT, source_connection="warehouse"), "Target", "table"),
+        (dict(statement=_STATEMENT, source_connection="warehouse", table="landing.records"),
+         "Target", "connection"),
+        # A connection alone is SHARED by both query kinds and decides nothing,
+        # so the Source is a file source and says so -- its own rule, not ours.
+        (dict(source_connection="warehouse", table="landing.records", connection="reporting"),
+         "Source", "file"),
+        (dict(table="landing.records", connection="reporting"), "Source", "file"),
+    ])
+    def test_the_short_end_is_named(self, canonical, args, named, field) -> None:
+        with pytest.raises(ConfigError) as raised:
+            canonical.run(_args(**args))
 
         message = str(raised.value)
-        assert "--table" in message
-        assert "DESTINATION" in message
-
-    def test_a_statement_with_a_table_and_no_destination_connection(
-        self,
-    ) -> None:
-        """The destination's connection, and the message must say so.
-
-        Two connections exist now. "Add --connection" without saying which
-        end is exactly the ambiguity this wording prevents.
-        """
-        with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._check_load_arguments(
-                _args(statement=_STATEMENT, source_connection="warehouse",
-                      table="landing.records")
-            )
-
-        message = str(raised.value)
-        assert "--connection" in message
-        assert "DESTINATION" in message
-
-    def test_a_source_connection_with_no_statement(self) -> None:
-        with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._check_load_arguments(
-                _args(source_connection="warehouse", table="landing.records",
-                      connection="reporting")
-            )
-
-        assert "--statement" in str(raised.value)
-
-    def test_a_destination_with_no_source_at_all_still_refuses(self) -> None:
-        """The refusal the obstruction was written for, widened.
-
-        It used to say "add --file". A statement is a source too, so it now
-        offers both -- and still refuses, because a destination alone says
-        nothing about what to put in it.
-        """
-        with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._check_load_arguments(
-                _args(table="landing.records", connection="reporting")
-            )
-
-        message = str(raised.value)
-        assert "--file" in message and "--statement" in message
+        assert named in message and field in message
+        assert canonical.calls == []
 
 
 class TestASourceIsOne:
@@ -170,108 +125,68 @@ class TestASourceIsOne:
 
 
 class TestTheDispatch:
-    """Which entry point a query invocation reaches."""
+    """A query invocation is parsed into the objects and executed through them."""
 
-    @staticmethod
-    def _run(args: argparse.Namespace) -> dict:
-        seen: dict = {}
+    def test_a_query_reaches_the_boundary_as_a_resolved_query(self, canonical) -> None:
+        canonical.run(_whole(create=True))
 
-        def _capture(_ctx, _log, statement, source_connection, destination,
-                     connection, **kwargs):
-            seen.update(statement=statement,
-                        source_connection=source_connection,
-                        destination=destination, connection=connection,
-                        **kwargs)
-            return 7
+        seen = canonical.boundary
+        assert isinstance(seen["source"], QuerySource)
+        assert seen["source"].statement == _STATEMENT
+        assert seen["source"].conn == "handle:warehouse"
+        assert (seen["target"].schema, seen["target"].name) == ("landing", "records")
+        assert seen["target"].connection == "reporting"
+        assert seen["loader"].create_destination is True
+        assert seen["load_name"] == "query:landing.records"
 
-        with patch.object(rey_loader_main, "run_load_query", _capture), \
-             patch.object(rey_loader_main, "run_load_direct") as direct, \
-             patch.object(rey_loader_main, "run_load_one") as one, \
+    def test_it_takes_no_other_entry_path(self, canonical) -> None:
+        with patch.object(rey_loader_main, "run_load_one") as one, \
              patch.object(rey_loader_main, "run_load") as every:
-            rey_loader_main._execute_app_command(
-                _NS(), _NS(), args, True, _NS(info=lambda *_a: None),
-            )
+            canonical.run(_whole())
 
-        seen["other_shapes_untouched"] = not any(
-            (direct.called, one.called, every.called)
-        )
-        return seen
+        assert not (one.called or every.called)
+        assert len(canonical.calls) == 1
 
-    def test_a_query_invocation_reaches_the_query_wrapper_verbatim(
-        self,
-    ) -> None:
-        seen = self._run(_whole(create=True))
+    @pytest.mark.parametrize(("flag", "attribute"), [
+        ("replace", "replace_destination"), ("recreate", "recreate_destination"),
+    ])
+    def test_every_mode_reaches_the_boundary(self, canonical, flag, attribute) -> None:
+        """THE REGRESSION: these raised TypeError through the old wrapper."""
+        canonical.run(_whole(**{flag: True}))
 
-        assert seen["statement"] == _STATEMENT
-        assert seen["source_connection"] == "warehouse"
-        assert seen["destination"] == "landing.records"
-        assert seen["connection"] == "reporting"
-        assert seen["create_destination"] is True
-
-    def test_it_takes_no_other_shape(self) -> None:
-        """One branch, and the file shapes are not consulted."""
-        assert self._run(_whole())["other_shapes_untouched"]
+        assert getattr(canonical.boundary["loader"], attribute) is True
 
 
 class TestTheQueryEntryPoint:
-    """What run_load_query does with what it is given."""
+    """run_load_objects is a wrapper: it hands the objects to rey_lib and counts."""
 
-    def test_it_reaches_the_library_with_the_arguments_verbatim(
-        self, run_log
-    ) -> None:
+    def test_it_hands_the_objects_over(self, run_log) -> None:
         seen: dict = {}
 
-        def _capture(_ctx, _log, statement, source_connection, destination,
-                     connection, **kwargs):
-            seen.update(statement=statement,
-                        source_connection=source_connection,
-                        destination=destination, connection=connection,
-                        **kwargs)
+        def _capture(_ctx, _log, source, transform, target):
+            seen.update(source=source, transform=transform, target=target)
             return 5
 
-        with patch.object(load_module, "_load_query_to_table", _capture):
-            total = load_module.run_load_query(
-                _NS(), run_log, _STATEMENT, "warehouse",
-                "landing.records", "reporting", create_destination=True,
-            )
+        source, transform, target = rey_loader_main._load_objects_from(_whole())
+        with patch.object(load_module, "run_selected_load", _capture):
+            total = load_module.run_load_objects(_NS(), run_log, source, transform, target)
 
         assert total == 5
-        assert seen["statement"] == _STATEMENT
-        assert seen["source_connection"] == "warehouse"
-        assert seen["destination"] == "landing.records"
-        assert seen["connection"] == "reporting"
-        assert seen["create_destination"] is True
+        assert seen["source"] is source and seen["target"] is target
 
-    def test_an_empty_statement_is_refused_before_any_connection(
-        self, run_log
-    ) -> None:
-        """The sibling of "no such file", and for the same reason.
+    def test_an_empty_statement_is_refused_before_the_boundary(self, canonical) -> None:
+        with pytest.raises(ConfigError) as raised:
+            canonical.run(_args(statement="   ", source_connection="warehouse",
+                                table="landing.records", connection="reporting"))
 
-        Letting an empty statement reach the database turns a mistyped
-        invocation into a provider syntax error, which names the wrong thing.
-        """
-        def _never(*_a, **_k):
-            raise AssertionError("reached the library with no statement")
-
-        with patch.object(load_module, "_load_query_to_table", _never):
-            with pytest.raises(ReyLoaderError) as raised:
-                load_module.run_load_query(
-                    _NS(), run_log, "   ", "warehouse",
-                    "landing.records", "reporting",
-                )
-
-        assert "--statement" in str(raised.value)
+        # A blank statement says nothing, so the Source refuses by its own
+        # contract -- before any connection or boundary is reached.
+        assert "Source" in str(raised.value)
+        assert canonical.calls == []
 
 
 class TestAQueryMayGoToAFile:
-    """The sixth shape: ``--out-file`` instead of a table and a connection.
-
-    A FILE DESTINATION HAS NO CONNECTION, which is the whole reason this is
-    its own shape rather than a choice inside the fourth. Every refusal here
-    exists so an operator is told which END is wrong -- the mistake this shape
-    invites is giving a file and a connection together, and being told to add
-    a table would send them to build a second destination.
-    """
+    """``--out-file`` instead of a table and a connection."""
 
     @staticmethod
     def _to_file(**over) -> argparse.Namespace:
@@ -281,49 +196,21 @@ class TestAQueryMayGoToAFile:
     def test_a_complete_invocation_is_accepted(self) -> None:
         rey_loader_main._check_load_arguments(self._to_file())
 
-    def test_it_reaches_the_file_wrapper_and_not_the_table_one(self) -> None:
-        """One branch, and the table shape is not consulted."""
-        seen: dict = {}
+    def test_it_reaches_the_boundary_with_a_target_file(self, canonical) -> None:
+        canonical.run(self._to_file())
 
-        def _capture(_ctx, _log, statement, source_connection, out_file,
-                     **kwargs):
-            seen.update(statement=statement,
-                        source_connection=source_connection,
-                        out_file=out_file, **kwargs)
-            return 4
+        seen = canonical.boundary
+        assert isinstance(seen["source"], QuerySource)
+        assert isinstance(seen["target"], DataFile)
+        assert str(seen["target"].path) == "/tmp/rows.csv"
+        assert "loader" not in seen
+        assert seen["load_name"] == "query:rows.csv"
 
-        with patch.object(rey_loader_main, "run_load_query_to_file", _capture), \
-             patch.object(rey_loader_main, "run_load_query") as to_table, \
-             patch.object(rey_loader_main, "run_load_direct") as direct, \
-             patch.object(rey_loader_main, "run_load_one") as one, \
-             patch.object(rey_loader_main, "run_load") as every:
-            rey_loader_main._execute_app_command(
-                _NS(), _NS(), self._to_file(), True, _NS(info=lambda *_a: None),
-            )
+    def test_a_target_file_has_no_format_field(self) -> None:
+        """`--file-type` describes a file being READ; a target file's suffix says."""
+        file_kind = next(one for one in TARGET_KINDS if one.id == "file")
 
-        assert seen == {"statement": _STATEMENT,
-                        "source_connection": "warehouse",
-                        "out_file": "/tmp/rows.csv",
-                        # No declaration given, so none is carried: the load
-                        # writes the rows as the query returned them.
-                        "transform": None}
-        assert not any(
-            (to_table.called, direct.called, one.called, every.called)
-        )
-
-    def test_no_format_is_passed_with_it(self) -> None:
-        """`--file-type` describes a file being READ.
-
-        Asserted on the SIGNATURE the dispatch calls, because the mistake it
-        prevents is silent: a destination format passed here would give one
-        name two meanings, and the guard already refuses `--file-type` beside
-        a statement so there would be nothing to pass anyway.
-        """
-        from inspect import signature
-
-        from rey_loader.load import run_load_query_to_file
-
-        assert "file_type" not in signature(run_load_query_to_file).parameters
+        assert "file-type" not in file_kind.fields
 
     def test_a_file_and_a_table_are_two_destinations(self) -> None:
         with pytest.raises(ReyLoaderError) as raised:
@@ -335,47 +222,14 @@ class TestAQueryMayGoToAFile:
         assert "DESTINATION" in message
         assert "--out-file" in message and "--table" in message
 
-    def test_a_connection_beside_it_is_refused_naming_the_file(self) -> None:
-        """NOT "add --table", which is what the old refusal would have said.
+    def test_a_file_destination_with_no_source(self, canonical) -> None:
+        with pytest.raises(ConfigError) as raised:
+            canonical.run(_args(out_file="/tmp/rows.csv"))
 
-        A file has no connection. Telling an operator to name a table sends
-        them to add a second destination for a load that already has one.
-        """
-        with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._check_load_arguments(
-                self._to_file(connection="reporting")
-            )
-
-        message = str(raised.value)
-        assert "--out-file" in message
-        assert "--table" not in message
-
-    def test_a_file_destination_with_no_source(self) -> None:
-        with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._check_load_arguments(
-                _args(out_file="/tmp/rows.csv")
-            )
-
-        message = str(raised.value)
-        assert "--out-file" in message and "--statement" in message
-
-    def test_a_statement_naming_neither_destination(self) -> None:
-        """The refusal now offers both, because there are two."""
-        with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._check_load_arguments(
-                _args(statement=_STATEMENT, source_connection="warehouse")
-            )
-
-        message = str(raised.value)
-        assert "--table" in message and "--out-file" in message
-        assert "DESTINATION" in message
+        assert "Source" in str(raised.value)
+        assert canonical.calls == []
 
     def test_a_format_is_still_refused_beside_a_statement(self) -> None:
-        """Unchanged, and it must stay that way.
-
-        `--file-type` is a SOURCE fact. A file destination did not make it
-        destination-sensitive: the out-file's suffix answers that.
-        """
         with pytest.raises(ReyLoaderError) as raised:
             rey_loader_main._check_load_arguments(self._to_file(file_type="CSV"))
 
@@ -385,10 +239,7 @@ class TestAQueryMayGoToAFile:
 class TestTheStatementCanComeFromAFile:
     """``--sql-file`` is a TRANSPORT for the statement, not a second source.
 
-    A statement long enough to be worth version-controlling cannot be pasted
-    onto a command line and cannot be reviewed in a diff. Both forms produce
-    one QuerySource through one entry point, and nothing below the CLI learns
-    which was used -- which is what these assert.
+    Both forms produce one QuerySource, read by the canonical Source.
     """
 
     @staticmethod
@@ -397,87 +248,52 @@ class TestTheStatementCanComeFromAFile:
         path.write_text(text, encoding="utf-8")
         return str(path)
 
-    def test_a_file_and_an_inline_statement_produce_the_same_text(
-        self, tmp_path
+    def test_a_file_and_an_inline_statement_reach_the_same_query(
+        self, canonical, tmp_path,
     ) -> None:
-        """THE ASSERTION THAT SAYS THIS IS A TRANSPORT.
+        canonical.run(_args(sql_file=self._written(tmp_path, _STATEMENT),
+                            source_connection="warehouse", table="landing.records",
+                            connection="reporting"))
+        canonical.run(_whole())
 
-        If the two forms ever diverged below this point, one of them would be
-        a second source model.
-        """
-        from_file = rey_loader_main._statement_from(
-            _args(sql_file=self._written(tmp_path, _STATEMENT))
-        )
-        inline = rey_loader_main._statement_from(_args(statement=_STATEMENT))
-
-        assert from_file == inline == _STATEMENT
-
-    def test_a_complete_file_invocation_is_not_refused(self, tmp_path) -> None:
-        rey_loader_main._check_load_arguments(
-            _args(sql_file=self._written(tmp_path, _STATEMENT),
-                  source_connection="warehouse", table="landing.records",
-                  connection="reporting")
-        )
+        from_file, inline = (call[0][0] for call in canonical.calls)
+        assert from_file.statement == inline.statement == _STATEMENT
+        assert from_file.conn == inline.conn
 
     def test_giving_both_forms_is_refused_and_names_both(self) -> None:
-        """Nothing is left to choose between them."""
         with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._check_load_arguments(
-                _whole(sql_file="query.sql")
-            )
+            rey_loader_main._check_load_arguments(_whole(sql_file="query.sql"))
 
         message = str(raised.value)
         assert "--statement" in message and "--sql-file" in message
 
-    def test_a_missing_file_is_refused_by_name(self) -> None:
+    def test_a_file_and_a_sql_file_are_two_sources(self) -> None:
         with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._statement_from(_args(sql_file="/nowhere/q.sql"))
-
-        message = str(raised.value)
-        assert "--sql-file" in message and "/nowhere/q.sql" in message
-
-    def test_an_empty_file_is_refused(self, tmp_path) -> None:
-        """A mistyped path or an unsaved editor.
-
-        Letting it through reaches the database as a syntax error naming the
-        wrong thing.
-        """
-        with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._statement_from(
-                _args(sql_file=self._written(tmp_path, "   \n\n"))
+            rey_loader_main._check_load_arguments(
+                _args(file="asset.csv", sql_file="query.sql", source_connection="w",
+                      table="landing.records", connection="reporting")
             )
 
-        assert "--sql-file" in str(raised.value)
+        assert "SOURCE" in str(raised.value)
 
-    def test_the_whole_shape_is_proved_for_it_too(self, tmp_path) -> None:
-        """THE NORMALISATION WORKING, not a second set of checks.
+    def test_a_format_beside_a_sql_file_is_refused(self) -> None:
+        with pytest.raises(ReyLoaderError) as raised:
+            rey_loader_main._check_load_arguments(
+                _args(sql_file="query.sql", source_connection="w", file_type="CSV",
+                      table="landing.records", connection="reporting")
+            )
 
-        Every refusal the inline form gets, this form gets -- because the
-        guard reads "a query is named" once rather than testing two options
-        everywhere.
-        """
-        given = self._written(tmp_path, _STATEMENT)
+        assert "--file-type" in str(raised.value)
 
-        for absent, expected in (
-            ({"table": "landing.records", "connection": "reporting"},
-             "--source-connection"),
-            ({"source_connection": "warehouse"}, "--table"),
-            ({"source_connection": "warehouse", "table": "landing.records"},
-             "--connection"),
-        ):
-            with pytest.raises(ReyLoaderError) as raised:
-                rey_loader_main._check_load_arguments(
-                    _args(sql_file=given, **absent)
-                )
-            assert expected in str(raised.value), absent
+    @pytest.mark.parametrize("text", [None, "   \n\n"])
+    def test_a_missing_or_empty_file_is_refused_by_the_source(
+        self, canonical, tmp_path, text,
+    ) -> None:
+        path = self._written(tmp_path, text) if text is not None else "/nowhere/q.sql"
 
-    def test_a_file_source_reaches_the_query_wrapper(self, tmp_path) -> None:
-        """One entry point, whichever transport was used."""
-        seen = TestTheDispatch._run(
-            _args(sql_file=self._written(tmp_path, _STATEMENT),
-                  source_connection="warehouse", table="landing.records",
-                  connection="reporting")
-        )
+        with pytest.raises(ConfigError) as raised:
+            canonical.run(_args(sql_file=path, source_connection="warehouse",
+                                table="landing.records", connection="reporting"))
 
-        assert seen["statement"] == _STATEMENT
-        assert seen["other_shapes_untouched"]
+        assert "sql_file" in str(raised.value)
+        assert canonical.calls == []

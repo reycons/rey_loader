@@ -30,6 +30,7 @@ import pytest
 
 import main as rey_loader_main
 from rey_loader import load as load_module
+from rey_lib.errors.error_utils import ConfigError
 from rey_loader.error_utils import ReyLoaderError
 
 
@@ -92,41 +93,42 @@ class TestTheTwoModes:
         rey_loader_main._check_load_arguments(_args())
 
 
-class TestIncompleteFormsAreRefusedByName:
-    """Each refusal says which option is missing, not that something is wrong."""
+class TestIncompleteFormsAreRefusedByTheObjects:
+    """Completeness is the canonical objects' own refusal, reached through the CLI."""
 
-    def test_a_table_with_no_connection(self) -> None:
+    def test_a_table_with_no_connection(self, canonical, tmp_path: Path) -> None:
+        source = tmp_path / "x.jsonl"
+        source.write_text('{"a": 1}\n', encoding="utf-8")
+
+        with pytest.raises(ConfigError) as raised:
+            canonical.run(_args(file=str(source), table="s.t"))
+
+        assert "Target" in str(raised.value) and "connection" in str(raised.value)
+        assert canonical.calls == []
+
+    def test_a_file_and_a_connection_with_no_table(self, canonical) -> None:
+        """Still the kept invocation refusal: --file names no destination."""
         with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._check_load_arguments(
-                _args(file="x.jsonl", table="s.t")
-            )
-
-        assert "--connection" in str(raised.value)
-
-    def test_a_connection_with_no_table(self) -> None:
-        with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._check_load_arguments(
-                _args(file="x.jsonl", connection="c")
-            )
+            canonical.run(_args(file="x.jsonl", connection="c"))
 
         assert "--table" in str(raised.value)
+        assert canonical.calls == []
 
     def test_a_file_that_says_nowhere_to_put_it(self) -> None:
-        """Neither a data source nor a destination. Refused, not guessed."""
+        """Neither a data source nor a destination: an ambiguous invocation, kept."""
         with pytest.raises(ReyLoaderError) as raised:
             rey_loader_main._check_load_arguments(_args(file="x.jsonl"))
 
         assert "--data-source" in str(raised.value)
         assert "--table" in str(raised.value)
 
-    def test_direct_options_without_a_file(self) -> None:
-        """A destination but nothing to put in it -- that is plain `load`."""
-        with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._check_load_arguments(
-                _args(table="s.t", connection="c")
-            )
+    def test_direct_options_without_a_source(self, canonical) -> None:
+        """A destination but nothing to put in it: the Source says what it needs."""
+        with pytest.raises(ConfigError) as raised:
+            canonical.run(_args(table="s.t", connection="c"))
 
-        assert "--file" in str(raised.value)
+        assert "Source" in str(raised.value) and "file" in str(raised.value)
+        assert canonical.calls == []
 
 
 class TestOptionOwnership:
@@ -169,60 +171,52 @@ class TestOptionOwnership:
         assert "--data-source" in str(raised.value)
 
 
-class TestTheDirectEntryPoint:
-    """What run_load_direct does with what it is given."""
+class TestTheDirectLoadRunsThroughTheObjects:
+    """A direct file load, parsed into the objects and executed through them."""
 
-    def test_it_reaches_the_library_with_the_arguments_verbatim(
-        self, tmp_path: Path, run_log
+    def test_the_file_and_table_reach_the_boundary_resolved(
+        self, canonical, tmp_path: Path, run_log,
     ) -> None:
         source = tmp_path / "asset.jsonl"
         source.write_text('{"a": 1}\n', encoding="utf-8")
-        seen: dict = {}
 
-        # THE LIBRARY'S SIGNATURE, in its current order:
-        #   (ctx, run_log, file_path, destination, connection, **kwargs)
-        # This capture was written for an older one that took a connection
-        # HANDLE third, so its names were shifted by one and `destination` was
-        # receiving the connection. The assertions below passed only because the
-        # test never ran -- it raised AttributeError on the patch beneath it.
-        def _capture(_ctx, _log, path, destination, _connection, **kwargs):
-            seen.update(path=path, destination=destination, **kwargs)
-            return 3
+        canonical.run(_args(file=str(source), table="testing.asset",
+                            connection="rey_loader", create=True, file_type="JSONL"),
+                      run_log)
 
-        # NO CONNECTION PATCH. run_load_direct passes the connection NAME and
-        # opens nothing; the library builds its target from it. Patching a
-        # `shared_connection` this module does not have is what made both tests
-        # in this class raise AttributeError instead of asserting anything.
-        with patch.object(load_module, "_load_file_to_table", _capture):
-            total = load_module.run_load_direct(
-                _NS(), run_log, source, "testing.asset", "rey_loader",
-                create_destination=True, file_type="JSONL",
-            )
+        seen = canonical.boundary
+        assert str(seen["source"].path) == str(source)
+        assert seen["target"].schema == "testing" and seen["target"].name == "asset"
+        assert seen["target"].connection == "rey_loader"
+        assert seen["loader"].create_destination is True
+        assert seen["run_log"] is run_log
 
-        assert total == 3
-        assert seen["destination"] == "testing.asset"
-        assert seen["create_destination"] is True
-        assert seen["file_type"] == "JSONL"
-
-    def test_a_missing_file_is_refused_before_any_connection(
-        self, tmp_path: Path, run_log
+    @pytest.mark.parametrize(("flag", "attribute"), [
+        ("replace", "replace_destination"), ("recreate", "recreate_destination"),
+    ])
+    def test_every_mode_reaches_the_boundary(
+        self, canonical, tmp_path: Path, flag: str, attribute: str,
     ) -> None:
-        """Opening a database to discover the file is absent is wasted work."""
-        # GUARDED AT THE SEAM THAT EXISTS. run_load_direct resolves no connection
-        # itself -- it hands the library a connection NAME and the library opens
-        # one from the target it builds. So "no connection for a missing file" is
-        # proved by the library never being reached at all, which is the stronger
-        # statement and the one this module can actually make.
-        def _never(*_a, **_k):
-            raise AssertionError("reached the library for a missing file")
+        """THE REGRESSION for rey_loader_direct_loads_pass_modes_the_wrappers_do_not_take.
 
-        with patch.object(load_module, "_load_file_to_table", _never):
-            with pytest.raises(ReyLoaderError) as raised:
-                load_module.run_load_direct(
-                    _NS(), run_log, tmp_path / "gone.jsonl", "s.t", "c",
-                )
+        The old dispatch passed replace_destination= and recreate_destination=
+        to a wrapper that took neither, so every direct load raised TypeError.
+        """
+        source = tmp_path / "asset.csv"
+        source.write_text("a\n1\n", encoding="utf-8")
+
+        canonical.run(_args(file=str(source), table="s.t", connection="c", **{flag: True}))
+
+        assert getattr(canonical.boundary["loader"], attribute) is True
+
+    def test_a_missing_file_is_refused_before_the_boundary(
+        self, canonical, tmp_path: Path,
+    ) -> None:
+        with pytest.raises(ConfigError) as raised:
+            canonical.run(_args(file=str(tmp_path / "gone.jsonl"), table="s.t", connection="c"))
 
         assert "gone.jsonl" in str(raised.value)
+        assert canonical.calls == []
 
 
 class TestTheSurfaceIsRegistered:

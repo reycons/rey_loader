@@ -24,14 +24,12 @@ from pathlib import Path
 # Pre-parse --config-path / --config-dir and call load_dotenv before other imports.
 from typing import Any
 
-from rey_lib.config.config_utils import parse_yaml
 from rey_lib.config.cli import preparse_config_args
 preparse_config_args()
 
 from rey_lib.config.bootstrap import app_runtime
 from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_from_args
 from rey_lib.errors.error_utils import AppError, handle_exception
-from rey_lib.files import read_text_file
 from rey_lib.logs import get_logger
 from rey_lib.run_lifecycle import run_app_operation
 from rey_lib.logs import finalize_run_log
@@ -39,13 +37,8 @@ from rey_lib.logs import finalize_run_log
 from rey_lib.db.db_adapter import DBAdapter
 
 from rey_loader.error_utils import ReyLoaderError
-from rey_loader.load import (
-    run_load,
-    run_load_direct,
-    run_load_one,
-    run_load_query,
-    run_load_query_to_file,
-)
+from rey_lib.load import Source, Target, Transform
+from rey_loader.load import run_load, run_load_objects, run_load_one
 from rey_loader.sql_apply import run_sql_apply
 from rey_loader.transform import run_transform
 from rey_loader.workflow import needs_file_loop, run_file_workflow, run_process_workflow
@@ -189,42 +182,14 @@ def _execute_app_command(
         _check_load_arguments(args)
         if not apply:
             log.info("load skipped (dry-run).")
-        elif (args.statement or args.sql_file) and args.out_file:
-            # DIRECT, a query to a FILE. ONE connection, the source's: the
-            # destination is a file and has none.
-            # NO FILE TYPE. `--file-type` is a SOURCE fact -- it describes a
-            # data file being read, and the guard refuses it beside a
-            # statement. The destination's format comes from --out-file's own
-            # suffix, through the same resolver every file source goes
-            # through, which refuses by name rather than guessing.
-            run_load_query_to_file(
-                ctx, run_log, _statement_from(args), args.source_connection,
-                args.out_file, transform=_transform_from(args),
-            )
-        elif args.statement or args.sql_file:
-            # DIRECT, a query to a TABLE. Two connections: the statement runs
-            # on one and the destination lives on the other, and they may
-            # differ.
-            run_load_query(
-                ctx, run_log, _statement_from(args), args.source_connection,
-                args.table, args.connection,
-                create_destination=args.create,
-                replace_destination=args.replace,
-                recreate_destination=args.recreate,
-                transform=_transform_from(args),
-            )
-        elif args.file and args.table:
-            # DIRECT: the arguments say everything. No data source, no
-            # configured definition, nothing manufactured to stand in for one.
-            run_load_direct(
-                ctx, run_log, Path(args.file), args.table, args.connection,
-                create_destination=args.create,
-                replace_destination=args.replace,
-                recreate_destination=args.recreate, file_type=args.file_type,
-            )
+        elif _names_a_direct_load(args):
+            # DIRECT: the arguments ARE the load. They are parsed into the
+            # canonical Source, Transform and Target, which validate, resolve
+            # and execute themselves -- the CLI decides nothing about them.
+            run_load_objects(ctx, run_log, *_load_objects_from(args))
         elif args.file:
-            # CONFIGURED, one named file. The definition still decides the
-            # destination, the transform and the movements.
+            # CONFIGURED, one named file with --data-source. The definition
+            # still decides the destination, the transform and the movements.
             run_load_one(ctx, run_log, args.data_source, Path(args.file))
         else:
             run_load(ctx)
@@ -282,140 +247,75 @@ _UNCONFIGURED_ONLY_OPTIONS: dict[str, str] = {
 _FILE_ONLY_OPTIONS: tuple[str, ...] = ("file_type",)
 
 
-def _statement_from(args: argparse.Namespace) -> str:
-    """The SOURCE statement, however it was given.
+#: The options that name a DIRECT load: a source statement, a destination, or
+#: what may be done to it. `--file` is not here: with --data-source it names a
+#: configured load's file, and it joins a direct load only beside a destination.
+_DIRECT_OPTIONS: tuple[str, ...] = (
+    "statement", "sql_file", "source_connection", "table", "connection",
+    "out_file", "create", "replace", "recreate", "append",
+)
 
-    **THE FILE IS A TRANSPORT, NOT A SOURCE.** ``--sql-file`` carries the same
-    statement ``--statement`` carries inline; a statement long enough to be
-    worth version-controlling cannot be pasted onto a command line and cannot
-    be reviewed in a diff. Both produce one ``QuerySource``, and nothing below
-    this function learns which form was used.
+#: Each argument, under the canonical object and field it configures. Only the
+#: spelling differs: the field names ARE the loader's declared parameters.
+_SOURCE_ARGUMENTS: dict[str, str] = {
+    "file": "file", "file_type": "file-type", "statement": "statement",
+    "source_connection": "source-connection", "sql_file": "sql-file",
+}
+_TRANSFORM_ARGUMENTS: dict[str, str] = {
+    "transform": "transform", "transform_file": "transform-file",
+}
+_TARGET_ARGUMENTS: dict[str, str] = {
+    "table": "table", "connection": "connection", "out_file": "out-file",
+    "create": "create", "replace": "replace", "recreate": "recreate",
+    "append": "append",
+}
 
-    Resolved HERE, at the CLI boundary, rather than in ``load.py``.
-    ``run_load_direct`` refuses a missing file down there because there the
-    file IS the source; this one holds text and is read where the transport is
-    interpreted.
 
-    Args:
-        args: The parsed invocation. Exactly one form is present -- the guard
-            refuses both, and refuses neither where a query shape is named.
+def _names_a_direct_load(args: argparse.Namespace) -> bool:
+    """Whether the invocation names a direct load rather than a configured one."""
+    if args.data_source:
+        return False
+    return any(getattr(args, name, None) for name in _DIRECT_OPTIONS)
 
-    Returns:
-        The statement.
 
-    Raises:
-        ReyLoaderError: When the named file does not exist, or holds nothing.
-            An empty file is a mistyped path or an unsaved editor, and letting
-            it through would reach the database as a syntax error naming the
-            wrong thing.
+def _load_objects_from(args: argparse.Namespace) -> tuple[Source, Transform, Target]:
+    """The canonical Source, Transform and Target the arguments configure.
+
+    **PARSING ONLY.** Each given argument becomes a value under its object's own
+    field; no kind is chosen here -- each object infers its kind from its own
+    fields, by the one rule every entry point shares -- and nothing is read,
+    parsed or validated. Those are the objects' to do.
     """
-    if not args.sql_file:
-        return str(args.statement or "")
+    def values(names: dict[str, str]) -> dict[str, Any]:
+        return {
+            field: getattr(args, name)
+            for name, field in names.items()
+            if getattr(args, name, None) not in (None, "", False)
+        }
 
-    path = Path(args.sql_file)
-    if not path.is_file():
-        raise ReyLoaderError(f"load --sql-file: no such file: {path}")
-
-    statement = read_text_file(path)
-    if not statement.strip():
-        raise ReyLoaderError(f"load --sql-file: {path} holds no statement.")
-    return statement
-
-
-def _transform_from(args: argparse.Namespace) -> Any:
-    """The transform declaration, however it was given.
-
-    **THE SIBLING OF ``_statement_from``, and for the same reason.** A
-    declaration long enough to be worth reviewing cannot be pasted onto a
-    command line and cannot be read in a diff, so it may come from a file --
-    and nothing below this function learns which form was used.
-
-    Parsed with ``parse_yaml``, so an operator writes the same shape a
-    ``transforms:`` block holds. YAML is a superset of JSON, which means a
-    caller that would rather send JSON needs no second reader.
-
-    Args:
-        args: The parsed invocation. The guard refuses both forms together.
-
-    Returns:
-        The declaration, or None where none was given. **None is not an empty
-        declaration**: one means the rows are loaded as they came, the other
-        would mean a load that produces no columns at all.
-
-    Raises:
-        ReyLoaderError: When the named file does not exist or holds nothing,
-            or when what was given is not a declaration. An empty file is a
-            mistyped path or an unsaved editor, and letting it through would
-            silently load untransformed rows.
-    """
-    if args.transform_file:
-        path = Path(args.transform_file)
-        if not path.is_file():
-            raise ReyLoaderError(f"load --transform-file: no such file: {path}")
-        text = read_text_file(path)
-        named = f"--transform-file {path}"
-    elif args.transform:
-        text = str(args.transform)
-        named = "--transform"
-    else:
-        return None
-
-    if not text.strip():
-        raise ReyLoaderError(f"load {named} holds no declaration.")
-
-    try:
-        declared = parse_yaml(text)
-    except Exception as exc:                      # the parser names the fault
-        raise ReyLoaderError(f"load {named} could not be read: {exc}") from exc
-
-    if not isinstance(declared, dict) or not declared.get("columns"):
-        raise ReyLoaderError(
-            f"load {named} declares no columns. A transform says what each "
-            "output column is and where it comes from; one with none would "
-            "produce records with no fields."
-        )
-    return declared
+    return (
+        Source(values(_SOURCE_ARGUMENTS)),
+        Transform(values(_TRANSFORM_ARGUMENTS)),
+        Target(values(_TARGET_ARGUMENTS)),
+    )
 
 
 def _check_load_arguments(args: argparse.Namespace) -> None:
-    """Refuse an incomplete or mixed `load` invocation, by name.
+    """Refuse an AMBIGUOUS `load` invocation, by name.
 
-    Three valid single-source modes, and they must not collapse into one:
+    **INVOCATION AMBIGUITY ONLY.** What makes a load complete -- a statement's
+    connection, a table's connection -- and the rule that a destination has one
+    mode are the canonical objects' own, and they refuse by their own
+    contracts. What is refused here is an invocation that says two things at
+    once, which the objects would otherwise settle silently by inference:
 
         --file --data-source                     CONFIGURED
-        --file --table --connection              DIRECT, a file
-        --statement --source-connection
-                    --table --connection         DIRECT, a query to a table
-        --statement --source-connection
-                    --out-file                   DIRECT, a query to a file
-
-    **THE LOADER IS TWO-ENDED NOW, SO A REFUSAL MUST NAME THE END.** A query
-    load carries two connections -- one the statement runs on, one the
-    destination lives on -- and a message that says only "add --connection"
-    sends an operator to fix whichever end they were not thinking about.
+        --file / --statement / --sql-file        one SOURCE, never two
+        --table / --out-file                     one DESTINATION, never two
 
     Raises:
-        ReyLoaderError: Naming the option that is missing or does not belong,
-            and which END it belongs to.
+        ReyLoaderError: Naming the options that cannot go together.
     """
-    # THE DESTINATION HAS ONE MODE, and the three ways of saying so exclude
-    # each other. Create acts on an ABSENT destination and the other two on an
-    # existing one, so no pair of them describes a coherent load: a reader
-    # naming two has not said what they want, and guessing which they meant is
-    # how a load silently does the other thing.
-    modes = [
-        name for name in ("create", "replace", "recreate", "append")
-        if getattr(args, name, False)
-    ]
-    if len(modes) > 1:
-        named = ", ".join(f"--{one}" for one in modes)
-        raise ReyLoaderError(
-            f"load: {named} were given together, and a destination has one "
-            "mode. --create makes a table that is not there, --replace puts "
-            "these rows in place of what is in one that is, --recreate "
-            "destroys that table and builds it again from them, and --append "
-            "adds to it. Name the one that is meant."
-        )
 
     unconfigured_given = [
         name for name in _UNCONFIGURED_ONLY_OPTIONS if getattr(args, name, None)
@@ -476,20 +376,6 @@ def _check_load_arguments(args: argparse.Namespace) -> None:
             "a query. Drop it."
         )
 
-    # THE QUERY SHAPE, PROVED WHOLE. Each half is checked on its own terms so
-    # the message names the end that is short -- a statement with no table is
-    # a DESTINATION fault, not a source one.
-    if names_a_query and not args.source_connection:
-        raise ReyLoaderError(
-            "A statement names a SOURCE with no way to reach it. Add "
-            "--source-connection <name>."
-        )
-    if args.source_connection and not names_a_query:
-        raise ReyLoaderError(
-            f"--source-connection {args.source_connection} names a source "
-            "connection with no statement to run on it. Add --statement or "
-            "--sql-file, or drop it."
-        )
     # TWO DESTINATIONS. A table and a file are both where the rows go, and
     # choosing between them silently would write one and leave the operator
     # believing they had asked for the other.
@@ -498,47 +384,7 @@ def _check_load_arguments(args: argparse.Namespace) -> None:
             "--out-file and --table each name a DESTINATION, and a load has "
             "one. Drop whichever you did not mean."
         )
-    if names_a_query and not (args.table or args.out_file):
-        raise ReyLoaderError(
-            "A statement does not say where its rows go. Add --table "
-            "<schema.table> and --connection <name>, or --out-file <path>, "
-            "for the DESTINATION."
-        )
-    # A FILE DESTINATION HAS NO CONNECTION, so one given beside it is a
-    # destination connection with no destination to reach -- said here rather
-    # than by the --connection refusal below, which would name --table and
-    # send the operator to add a second destination.
-    if args.out_file and args.connection:
-        raise ReyLoaderError(
-            f"--connection {args.connection} reaches a DESTINATION database, "
-            "and --out-file names a file, which has none. Drop it."
-        )
-    if args.out_file and not names_a_query:
-        raise ReyLoaderError(
-            f"--out-file {args.out_file} names a DESTINATION with no source "
-            "to fill it. Add --statement or --sql-file."
-        )
 
-    # A DESTINATION WITH NO SOURCE AT ALL. This used to say "add --file",
-    # which would now refuse every valid query load: --table and --connection
-    # are given without a --file whenever the source is a statement.
-    if unconfigured_given and not (args.file or names_a_query):
-        raise ReyLoaderError(
-            "--table and --connection load ONE named source; add --file, "
-            "--statement or --sql-file, or drop them to load every "
-            "discovered file."
-        )
-
-    if args.table and not args.connection:
-        raise ReyLoaderError(
-            f"--table {args.table} names a DESTINATION with no way to reach "
-            "it. Add --connection <name>."
-        )
-    if args.connection and not args.table:
-        raise ReyLoaderError(
-            f"--connection {args.connection} names a DESTINATION connection "
-            "with no destination. Add --table <schema.table>."
-        )
     if args.file and not (args.data_source or args.table):
         raise ReyLoaderError(
             "--file does not say where the file goes. Add --data-source to "

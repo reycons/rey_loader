@@ -16,12 +16,11 @@ is where transform declarations are owned.
 from __future__ import annotations
 
 import argparse
-from types import SimpleNamespace as _NS
-from unittest.mock import patch
 
 import pytest
 
 import main as rey_loader_main
+from rey_lib.errors.error_utils import ConfigError
 from rey_loader.error_utils import ReyLoaderError
 
 _STATEMENT = "select a, b from orders"
@@ -49,136 +48,88 @@ def _written(tmp_path, text: str) -> str:
     return str(path)
 
 
+def _query(**over) -> argparse.Namespace:
+    """A complete query-to-table invocation, with whatever transform is named."""
+    return _args(statement=_STATEMENT, source_connection="w",
+                 table="landing.records", connection="reporting", **over)
+
+
 class TestTheTwoFormsAreOneDeclaration:
+    """Inline and from a file, read by the canonical Transform alike."""
 
-    def test_a_file_and_an_inline_declaration_read_the_same(self, tmp_path) -> None:
-        """THE ASSERTION THAT SAYS THIS IS A TRANSPORT.
+    def test_a_file_and_an_inline_declaration_reach_the_load_alike(
+        self, canonical, tmp_path,
+    ) -> None:
+        canonical.run(_query(transform_file=_written(tmp_path, _YAML)))
+        canonical.run(_query(transform=_YAML))
 
-        If they diverged below this point, one of them would be a second way
-        of declaring a transform -- which is the registry this must not be.
-        """
-        from_file = rey_loader_main._transform_from(
-            _args(transform_file=_written(tmp_path, _YAML))
-        )
-        inline = rey_loader_main._transform_from(_args(transform=_YAML))
+        from_file, inline = (call[0][1] for call in canonical.calls)
+        assert from_file.columns == inline.columns == ["identifier", "label"]
 
-        assert from_file == inline
-        assert [one["name"] for one in inline["columns"]] == ["identifier", "label"]
+    def test_json_is_read_by_the_same_reader(self, canonical) -> None:
+        canonical.run(_query(
+            transform='{"columns": [{"name": "identifier", "source": "a"}]}',
+        ))
 
-    def test_json_is_read_by_the_same_reader(self) -> None:
-        """YAML is a superset of JSON, so a caller sending JSON needs no
-        second reader -- which is what lets a browser and an operator use one
-        declaration shape.
-        """
-        declared = rey_loader_main._transform_from(
-            _args(transform='{"columns": [{"name": "a", "source": "A"}]}')
-        )
-
-        assert declared == {"columns": [{"name": "a", "source": "A"}]}
+        assert canonical.boundary["transform"].columns == ["identifier"]
 
     def test_giving_both_forms_is_refused_and_names_both(self) -> None:
         with pytest.raises(ReyLoaderError) as raised:
             rey_loader_main._check_load_arguments(
-                _args(statement=_STATEMENT, source_connection="w",
-                      table="t", connection="c",
-                      transform=_YAML, transform_file="t.yaml")
+                _query(transform=_YAML, transform_file="t.yaml")
             )
 
         message = str(raised.value)
         assert "--transform" in message and "--transform-file" in message
-        assert "TRANSFORM" in message
 
 
 class TestNothingDeclaredIsNotAnEmptyDeclaration:
+    """No declaration is the identity transform; a bad one is refused."""
 
-    def test_no_declaration_answers_with_nothing(self) -> None:
-        """None means "load the rows as they came".
+    def test_no_declaration_is_the_identity_transform(self, canonical) -> None:
+        canonical.run(_query())
 
-        An empty declaration would mean a load that produces no columns at
-        all, and the two must not collapse into each other.
-        """
-        assert rey_loader_main._transform_from(_args()) is None
+        assert type(canonical.boundary["transform"]).__name__ == "IdentityTransform"
 
-    def test_a_declaration_with_no_columns_is_refused(self) -> None:
-        with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._transform_from(_args(transform="columns: []"))
+    @pytest.mark.parametrize(("given", "refused"), [
+        ({"transform": "columns: []"}, "declares no columns"),
+        ({"transform": "just a string"}, "not a declaration"),
+    ])
+    def test_a_bad_inline_declaration_is_refused(self, canonical, given, refused) -> None:
+        with pytest.raises(ConfigError, match=refused):
+            canonical.run(_query(**given))
+        assert canonical.calls == []
 
-        assert "declares no columns" in str(raised.value)
+    def test_an_empty_file_is_refused(self, canonical, tmp_path) -> None:
+        with pytest.raises(ConfigError, match="holds no declaration"):
+            canonical.run(_query(transform_file=_written(tmp_path, "  \n")))
+        assert canonical.calls == []
 
-    def test_an_empty_file_is_refused(self, tmp_path) -> None:
-        """A mistyped path or an unsaved editor.
+    def test_a_missing_file_is_refused_by_name(self, canonical) -> None:
+        with pytest.raises(ConfigError) as raised:
+            canonical.run(_query(transform_file="/nowhere/t.yaml"))
 
-        Letting it through would silently load untransformed rows, which is a
-        load that ran and did the wrong thing rather than one that refused.
-        """
-        with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._transform_from(
-                _args(transform_file=_written(tmp_path, "   \n\n"))
-            )
-
-        assert "--transform-file" in str(raised.value)
-
-    def test_a_missing_file_is_refused_by_name(self) -> None:
-        with pytest.raises(ReyLoaderError) as raised:
-            rey_loader_main._transform_from(
-                _args(transform_file="/nowhere/transform.yaml")
-            )
-
-        message = str(raised.value)
-        assert "--transform-file" in message and "/nowhere" in message
-
-    def test_something_that_is_not_a_declaration_is_refused(self) -> None:
-        with pytest.raises(ReyLoaderError):
-            rey_loader_main._transform_from(_args(transform="just a string"))
+        assert "/nowhere/t.yaml" in str(raised.value)
+        assert canonical.calls == []
 
 
 class TestItReachesTheLoad:
 
-    @staticmethod
-    def _run(args: argparse.Namespace) -> dict:
-        seen: dict = {}
+    def test_a_query_to_a_table_carries_it(self, canonical) -> None:
+        canonical.run(_query(transform=_YAML))
 
-        def _capture(_ctx, _log, *positional, **kwargs):
-            seen.update(kwargs)
-            return 3
+        assert canonical.boundary["transform"].columns == ["identifier", "label"]
 
-        with patch.object(rey_loader_main, "run_load_query", _capture), \
-             patch.object(rey_loader_main, "run_load_query_to_file", _capture):
-            rey_loader_main._execute_app_command(
-                _NS(), _NS(), args, True, _NS(info=lambda *_a: None),
-            )
-        return seen
-
-    def test_a_query_to_a_table_carries_it(self) -> None:
-        seen = self._run(_args(
-            statement=_STATEMENT, source_connection="w",
-            table="landing.records", connection="reporting", transform=_YAML,
-        ))
-
-        assert [one["name"] for one in seen["transform"]["columns"]] == [
-            "identifier", "label",
-        ]
-
-    def test_a_query_to_a_file_carries_it(self, tmp_path) -> None:
-        seen = self._run(_args(
-            statement=_STATEMENT, source_connection="w",
-            out_file="/tmp/rows.csv",
+    def test_a_query_to_a_file_carries_it(self, canonical, tmp_path) -> None:
+        canonical.run(_args(
+            statement=_STATEMENT, source_connection="w", out_file="/tmp/rows.csv",
             transform_file=_written(tmp_path, _YAML),
         ))
 
-        assert [one["name"] for one in seen["transform"]["columns"]] == [
-            "identifier", "label",
-        ]
+        assert canonical.boundary["transform"].columns == ["identifier", "label"]
 
-    def test_a_load_naming_none_carries_none(self) -> None:
-        """THE REGRESSION THAT MATTERS.
+    def test_a_load_naming_none_carries_the_identity_transform(self, canonical) -> None:
+        """Every load that says nothing about a transform loads its rows as they came."""
+        canonical.run(_query())
 
-        Every load that says nothing about a transform must reach the library
-        exactly as it did before.
-        """
-        seen = self._run(_args(
-            statement=_STATEMENT, source_connection="w",
-            table="landing.records", connection="reporting",
-        ))
-
-        assert seen["transform"] is None
+        assert type(canonical.boundary["transform"]).__name__ == "IdentityTransform"

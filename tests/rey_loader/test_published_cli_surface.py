@@ -426,16 +426,18 @@ class TestADestinationHasOneMode:
 
         _check_load_arguments(self._args())
 
-    def test_two_modes_are_refused_by_name(self) -> None:
-        from main import ReyLoaderError, _check_load_arguments
+    def test_two_modes_are_refused_by_the_target(self, canonical, tmp_path) -> None:
+        """THE TARGET'S RULE, reached through the CLI: one mode, named together."""
+        from rey_lib.errors.error_utils import ConfigError
 
+        source = tmp_path / "f.csv"
+        source.write_text("a\n1\n", encoding="utf-8")
         for first, second in (
             ("create", "replace"), ("create", "append"), ("replace", "append"),
         ):
-            with pytest.raises(ReyLoaderError) as raised:
-                _check_load_arguments(
-                    self._args(**{first: True, second: True})
-                )
+            with pytest.raises(ConfigError) as raised:
+                canonical.run(self._args(file=str(source), **{first: True, second: True}))
 
             message = str(raised.value)
-            assert f"--{first}" in message and f"--{second}" in message
+            assert "Target" in message and first in message and second in message
+        assert canonical.calls == []
