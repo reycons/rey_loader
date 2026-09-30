@@ -664,6 +664,8 @@ def get_registration() -> dict[str, Any]:
         # A NAME, never markup. The surface that draws it holds the artwork and
         # accepts no SVG from an installed distribution.
         "icon": "app.rey_loader",
+        # The panel kind this application is drawn by, published as its icon is.
+        "panel": "loader_panel",
         "entry_point": "main.py",
         "cli": CLI,
         "workflow_operations": WORKFLOW_OPERATIONS,
