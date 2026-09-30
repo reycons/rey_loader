@@ -163,7 +163,7 @@ class TestTheQueryEntryPoint:
     def test_it_hands_the_objects_over(self, run_log) -> None:
         seen: dict = {}
 
-        def _capture(_ctx, _log, source, transform, target):
+        def _capture(_ctx, _log, source, transform, target, reader=None):
             seen.update(source=source, transform=transform, target=target)
             return 5
 

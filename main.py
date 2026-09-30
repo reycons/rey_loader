@@ -253,6 +253,7 @@ _FILE_ONLY_OPTIONS: tuple[str, ...] = ("file_type",)
 _DIRECT_OPTIONS: tuple[str, ...] = (
     "statement", "sql_file", "source_connection", "table", "connection",
     "out_file", "create", "replace", "recreate", "append",
+    "file_manifest_id", "file_mutation_id", "file_type_id",
 )
 
 #: Each argument, under the canonical object and field it configures. Only the
@@ -260,6 +261,8 @@ _DIRECT_OPTIONS: tuple[str, ...] = (
 _SOURCE_ARGUMENTS: dict[str, str] = {
     "file": "file", "file_type": "file-type", "statement": "statement",
     "source_connection": "source-connection", "sql_file": "sql-file",
+    "file_manifest_id": "file-manifest-id", "file_mutation_id": "file-mutation-id",
+    "file_type_id": "file-type-id",
 }
 _TRANSFORM_ARGUMENTS: dict[str, str] = {
     "transform": "transform", "transform_file": "transform-file",
@@ -531,6 +534,28 @@ def _parse_args() -> argparse.Namespace:
         help="With load --file --table: the file's format, where its suffix "
              "does not name one. A configured load declares this on its "
              "transform instead.",
+    )
+    # A GOVERNED FILE, named by its identity rather than a path -- the three
+    # options the registration declares for `load`. Each becomes the Source's
+    # own field of the same name.
+    parser.add_argument(
+        "--file-manifest-id",
+        dest="file_manifest_id",
+        default="",
+        help="With load: the governed file's manifest id.",
+    )
+    parser.add_argument(
+        "--file-mutation-id",
+        dest="file_mutation_id",
+        default="",
+        help="With load: the governed file's mutation id.",
+    )
+    parser.add_argument(
+        "--file-type-id",
+        dest="file_type_id",
+        default="",
+        help="With load --file-manifest-id / --file-mutation-id: the governing "
+             "file type, where it is not the file's own.",
     )
     parser.add_argument(
         "--dry-run",

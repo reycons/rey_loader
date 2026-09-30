@@ -22,7 +22,8 @@ def _args(**kwargs) -> argparse.Namespace:
     base = dict(command="load", file="", data_source="", table="",
                 connection="", create=False, replace=False, recreate=False, append=False,
                 file_type="", statement="", source_connection="", sql_file="",
-                out_file="", transform="", transform_file="")
+                out_file="", transform="", transform_file="",
+                file_manifest_id="", file_mutation_id="", file_type_id="")
     base.update(kwargs)
     return argparse.Namespace(**base)
 
@@ -30,9 +31,9 @@ def _args(**kwargs) -> argparse.Namespace:
 class TestEachArgumentGoesToItsObject:
 
     def test_the_mapping_is_the_objects_vocabulary(self) -> None:
-        assert set(rey_loader_main._SOURCE_ARGUMENTS.values()) == set(SOURCE_FIELDS) - {
-            "file-manifest-id", "file-mutation-id", "file-type-id",
-        }
+        # EVERY SOURCE FIELD, the governed identities included: the registration
+        # declares all three for `load`, so the parser accepts them.
+        assert set(rey_loader_main._SOURCE_ARGUMENTS.values()) == set(SOURCE_FIELDS)
         assert set(rey_loader_main._TRANSFORM_ARGUMENTS.values()) == set(TRANSFORM_PARAMETERS)
         assert set(rey_loader_main._TARGET_ARGUMENTS.values()) == set(TARGET_PARAMETERS)
 
@@ -84,3 +85,50 @@ class TestTheThreeEntryPathsStayApart:
 
     def test_nothing_is_discovery(self) -> None:
         assert self._dispatch(_args()) == "discovery"
+
+
+class TestAGovernedFileIsNamedByItsIdentity:
+
+    def test_the_parser_accepts_the_three_identities(self) -> None:
+        with patch("sys.argv", ["main.py", "load", "--file-manifest-id", "10",
+                                "--file-mutation-id", "25", "--file-type-id", "4"]):
+            args = rey_loader_main._parse_args()
+
+        assert (args.file_manifest_id, args.file_mutation_id, args.file_type_id) == (
+            "10", "25", "4")
+
+    def test_a_file_with_its_mutation_is_a_file_source_and_a_direct_load(self) -> None:
+        args = _args(file="/data/a.csv", file_mutation_id="1881",
+                     table="s.t", connection="c")
+
+        source, _, _ = rey_loader_main._load_objects_from(args)
+
+        assert source.selected_kind() == "file"
+        assert source.value("file-mutation-id") == "1881"
+        assert rey_loader_main._names_a_direct_load(args) is True
+
+    def test_an_identity_alone_is_a_manifest_source(self) -> None:
+        source, _, _ = rey_loader_main._load_objects_from(_args(file_manifest_id="10"))
+
+        assert source.selected_kind() == "manifest"
+
+
+class TestAManifestSourceIsReadThroughTheRuntimesControl:
+
+    def test_the_reader_is_passed_only_for_a_manifest_source(self) -> None:
+        from rey_lib.load import Source, Target, Transform
+        from rey_loader import load as load_module
+
+        seen: list = []
+        control = object()
+        with patch.object(load_module, "run_selected_load",
+                          lambda *a, reader=None: seen.append(reader) or 0), \
+             patch.object(load_module, "open_shared_control",
+                          lambda ctx: _NS(shared_control=control)):
+            load_module.run_load_objects(_NS(), None, Source({"file-manifest-id": "10"}),
+                                         Transform(), Target())
+            load_module.run_load_objects(_NS(), None, Source({"file": "/a.csv"}),
+                                         Transform(), Target())
+
+        assert seen == [control, None]
+

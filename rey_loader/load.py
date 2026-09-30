@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from rey_lib.config.bootstrap import open_shared_control
 from rey_lib.config.config_utils import Namespace
 from rey_lib.load import Source, Target, Transform, run_selected_load
 from rey_lib.load.load_operation import load_one as _load_one
@@ -65,7 +66,14 @@ def run_load_objects(ctx: Namespace, run_log, source: Source, transform: Transfo
         "Loading a %s source into a %s target",
         source.selected_kind(), target.selected_kind(),
     )
-    total = run_selected_load(ctx, run_log, source, transform, target)
+    # THE GOVERNED READ'S READER, only where a manifest source needs one:
+    # opening the shared Control takes the control map off the context, so it
+    # is not opened for a load that never reads it.
+    reader = (
+        open_shared_control(ctx).shared_control
+        if source.selected_kind() == "manifest" else None
+    )
+    total = run_selected_load(ctx, run_log, source, transform, target, reader=reader)
     _logger.info("Load complete: %d row(s) loaded.", total)
     return total
 
