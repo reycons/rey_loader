@@ -140,36 +140,39 @@ class TestExitBehaviourIsUnchanged:
 
         assert exc.value.code == 3
 
-    def test_an_app_error_still_exits_one(self, monkeypatch) -> None:
+    def test_an_app_error_is_logged_and_raised(self, monkeypatch) -> None:
         from rey_lib.errors.error_utils import AppError
 
-        collected = self._run(monkeypatch, raises=AppError("boom"))
+        failure = AppError("boom")
+        collected = self._run(monkeypatch, raises=failure)
         args = SimpleNamespace(command="load", dry_run=False, ctx_file=None,
                                env_overrides=[])
 
         with patch.object(loader_main, "build_ctx_from_args",
                           return_value=SimpleNamespace()), \
-             patch.object(loader_main, "_parse_args", return_value=args), \
-             patch.object(loader_main, "handle_exception", lambda *a: None):
-            with pytest.raises(SystemExit) as exc:
+             patch.object(loader_main, "_parse_args", return_value=args):
+            with pytest.raises(AppError) as exc:
                 loader_main.main()
 
-        assert exc.value.code == 1
+        assert exc.value.__cause__ is failure
         assert collected == ["finalized:run.jsonl"]
 
-    def test_an_unexpected_error_still_exits_two(self, monkeypatch) -> None:
-        collected = self._run(monkeypatch, raises=RuntimeError("unexpected"))
+    def test_an_unexpected_error_is_logged_and_raised_as_an_app_error(
+            self, monkeypatch) -> None:
+        from rey_lib.errors.error_utils import AppError
+
+        failure = RuntimeError("unexpected")
+        collected = self._run(monkeypatch, raises=failure)
         args = SimpleNamespace(command="load", dry_run=False, ctx_file=None,
                                env_overrides=[])
 
         with patch.object(loader_main, "build_ctx_from_args",
                           return_value=SimpleNamespace()), \
-             patch.object(loader_main, "_parse_args", return_value=args), \
-             patch.object(loader_main, "handle_exception", lambda *a: None):
-            with pytest.raises(SystemExit) as exc:
+             patch.object(loader_main, "_parse_args", return_value=args):
+            with pytest.raises(AppError) as exc:
                 loader_main.main()
 
-        assert exc.value.code == 2
+        assert exc.value.__cause__ is failure
         assert collected == ["finalized:run.jsonl"]
 
 

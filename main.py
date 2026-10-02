@@ -29,7 +29,7 @@ preparse_config_args()
 
 from rey_lib.config.bootstrap import app_runtime
 from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_from_args
-from rey_lib.errors.error_utils import AppError, handle_exception
+from rey_lib.errors.error_utils import AppError
 from rey_lib.logs import get_logger
 from rey_lib.run_lifecycle import run_app_operation
 from rey_lib.logs import finalize_run_log
@@ -94,12 +94,12 @@ def main() -> None:
             sys.exit(code)
 
         except AppError as exc:
-            handle_exception(log, exc, "rey_loader pipeline error")
-            sys.exit(1)
+            log.error("rey_loader pipeline error: %s", exc, exc_info=exc)
+            raise AppError(f"rey_loader pipeline error: {exc}") from exc
 
         except Exception as exc:  # noqa: BLE001  — top-level safety net only
-            handle_exception(log, exc, "Unexpected error in rey_loader")
-            sys.exit(2)
+            log.error("Unexpected error in rey_loader: %s", exc, exc_info=exc)
+            raise AppError(f"Unexpected error in rey_loader: {exc}") from exc
 
         finally:
             # Top-level owner (standalone run, not a pipeline step) explicitly creates
