@@ -184,7 +184,7 @@ def test_sql_apply_failure_records_canonical_error_evidence(run_log,
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """SQL execution failures surface sanitized child ERROR evidence."""
+    """SQL execution failures surface sanitized STEP_FAILURE evidence."""
     sql_dir = tmp_path / "sql"
     sql_dir.mkdir()
     sql_file = sql_dir / "001_bad.sql"
@@ -214,13 +214,13 @@ def test_sql_apply_failure_records_canonical_error_evidence(run_log,
         run_app_operation(ctx, run_log, "sql", lambda: sql_apply.run_sql_apply(ctx, run_log, "apply_sql"))
 
     records = _records(run_log)
-    error = next(record for record in records if record["record_type"] == "ERROR")
+    error = next(record for record in records if record["record_type"] == "STEP_FAILURE")
     failure = next(record for record in records if record["record_type"] == "RUN_COMPLETE")
     sql_record = next(record for record in records if record["record_type"] == "SQL_EXECUTION")
     assert _canonical(error)["error_type"] == "DatabaseError"
     assert "001_bad.sql failed" in _canonical(error)["error_message"]
     assert "hunter2" not in json.dumps(records)
-    assert failure["failure_record_id"] == _canonical(error)["error_id"]
+    assert failure["failure_record_id"] == _canonical(error)["failure_record_id"]
     assert sql_record["status"] == "failed"
     assert sql_record["sql_label"] == "001_bad.sql"
 
@@ -229,7 +229,7 @@ def test_sql_apply_connection_failure_records_canonical_error_evidence(run_log,
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """Database connection failures surface sanitized child ERROR evidence."""
+    """Database connection failures surface sanitized STEP_FAILURE evidence."""
     sql_dir = tmp_path / "sql"
     sql_dir.mkdir()
     (sql_dir / "001.sql").write_text("select 1", encoding="utf-8")
@@ -257,9 +257,9 @@ def test_sql_apply_connection_failure_records_canonical_error_evidence(run_log,
         run_app_operation(ctx, run_log, "sql", lambda: sql_apply.run_sql_apply(ctx, run_log, "apply_sql"))
 
     records = _records(run_log)
-    error = next(record for record in records if record["record_type"] == "ERROR")
+    error = next(record for record in records if record["record_type"] == "STEP_FAILURE")
     complete = next(record for record in records if record["record_type"] == "RUN_COMPLETE")
     assert _canonical(error)["error_type"] == "RuntimeError"
     assert "connection failed" in _canonical(error)["error_message"]
     assert "hunter2" not in json.dumps(records)
-    assert complete["failure_record_id"] == _canonical(error)["error_id"]
+    assert complete["failure_record_id"] == _canonical(error)["failure_record_id"]
