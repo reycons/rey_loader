@@ -130,6 +130,25 @@ def test_run_process_workflow_is_a_single_ordered_pass(run_log):
     assert order == ["s1", "s2", "s3"]
 
 
+def test_run_process_workflow_runs_only_the_selected_step(run_log):
+    order: list = []
+
+    def handler(ctx, run_log, config, run):
+        order.append(config.get("marker"))
+        return StepResult("x", "ok")
+
+    stub = {"sql_operation": handler, "validate": handler}
+    wf = _workflow(
+        _NS(id="s1", process="sql_operation", config=_NS(marker="s1")),
+        _NS(id="s2", process="validate", config=_NS(marker="s2")),
+    )
+    ctx = _NS(workflows=[wf], applications=_publishing("sql_operation", "validate"))
+    with patch("rey_loader.workflow.build_process_registry", return_value=stub):
+        code = run_process_workflow(ctx, run_log, object(), "w", apply=True, step="s1")
+    assert code == 0
+    assert order == ["s1"]
+
+
 def test_run_file_workflow_repeats_until_no_file(run_log):
     calls = {"n": 0}
 

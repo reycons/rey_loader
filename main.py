@@ -33,6 +33,7 @@ from rey_lib.errors.error_utils import AppError
 from rey_lib.logs import get_logger
 from rey_lib.run_lifecycle import run_app_operation
 from rey_lib.logs import finalize_run_log
+from rey_lib.workflow.cli import add_workflow_selection_args, workflow_selection
 
 from rey_lib.db.db_adapter import DBAdapter
 
@@ -115,10 +116,15 @@ def _run_workflow_command(ctx: object, run_log, args: argparse.Namespace, apply:
     if not args.workflow:
         raise ReyLoaderError("run-workflow requires --workflow <name>.")
 
+    # The step selection the shared engine resolves against the workflow's
+    # ordered steps: one step, or an inclusive range.
+    selection = workflow_selection(args)
     if needs_file_loop(ctx, args.workflow):
-        return run_file_workflow(ctx, run_log, DBAdapter(), args.workflow, apply=apply)
+        return run_file_workflow(ctx, run_log, DBAdapter(), args.workflow, apply=apply,
+                                 **selection)
     return run_process_workflow(
-        ctx, run_log, DBAdapter(), args.workflow, apply=apply, source=args.source
+        ctx, run_log, DBAdapter(), args.workflow, apply=apply, source=args.source,
+        **selection,
     )
 
 
@@ -416,6 +422,9 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Workflow name under 'workflows' in rey_loader config.",
     )
+    # The runner's standard step selection, defined by the shared workflow
+    # layer rather than declared again here.
+    add_workflow_selection_args(parser)
     parser.add_argument(
         "--source",
         default="",

@@ -34,6 +34,7 @@ from __future__ import annotations
 from typing import Any
 
 from rey_lib.files.file_loader import supported_file_types
+from rey_lib.workflow.cli import WORKFLOW_SELECTION_PARAMETERS
 
 __all__ = ["APPLICATION_NAME", "get_registration"]
 
@@ -177,6 +178,9 @@ _COMMANDS: list[dict[str, Any]] = [
                 "description": "For an sql or sql_apply workflow, which "
                                "sql_step to run.",
             },
+            # The runner's standard step selection, published from the shared
+            # workflow layer's one definition (backlog row 608).
+            *(dict(entry) for entry in WORKFLOW_SELECTION_PARAMETERS),
             _DRY_RUN,
         ],
     },

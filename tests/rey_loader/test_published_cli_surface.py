@@ -30,7 +30,9 @@ from rey_loader.registration import get_registration
 
 #: What each command reads, measured from main.py:
 #:
-#:   _run_workflow_command   args.workflow, args.source
+#:   _run_workflow_command   args.workflow, args.source, and the runner's
+#:                           step selection (step / from-step / to-step) through
+#:                           rey_lib.workflow.cli.workflow_selection
 #:   _execute_app_command    transform -> nothing; load -> the load options;
 #:                           all -> apply only; sql -> args.source
 #:
@@ -39,7 +41,7 @@ from rey_loader.registration import get_registration
 #: applies, so offering it a dry-run control would be a control with nothing
 #: behind it.
 CONSUMED: dict[str, set[str]] = {
-    "run-workflow": {"workflow", "source", "dry-run"},
+    "run-workflow": {"workflow", "source", "step", "from-step", "to-step", "dry-run"},
     "transform": set(),
     # `statement` and `source-connection` are the SOURCE end of the query
     # shapes; `table`, `connection` and `create` are a DATABASE destination
@@ -133,6 +135,7 @@ class TestTheRecipesInvariants:
             "table", "connection", "create", "replace", "recreate", "append",
             "out-file", "file-type", "dry-run",
             "file-manifest-id", "file-mutation-id", "file-type-id",
+            "step", "from-step", "to-step",
         }
 
     def test_one_declaration_style_only(self) -> None:

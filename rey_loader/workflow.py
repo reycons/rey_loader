@@ -333,7 +333,9 @@ def needs_file_loop(ctx: Any, name: str) -> bool:
 
 
 def run_file_workflow(ctx: Any, run_log: Any, adapter: Any, workflow_name: str, *,
-                      apply: bool = True, max_files: int = 100000) -> int:
+                      apply: bool = True, max_files: int = 100000,
+                      step: str | None = None, from_step: str | None = None,
+                      to_step: str | None = None) -> int:
     """Repeatedly run a single-file workflow until discovery finds no file.
 
     rey_loader owns the file-processing loop (the shared coordinator does not):
@@ -342,7 +344,18 @@ def run_file_workflow(ctx: Any, run_log: Any, adapter: Any, workflow_name: str, 
     reports no eligible file (``ctx.no_file``) the loop stops cleanly. A dry-run
     performs a single pass — files are not consumed, so repeating would
     rediscover the same file. ``max_files`` bounds the loop as a safety net.
+
+    Step selection is refused rather than ignored. Each pass repeats the whole
+    workflow for one discovered file, and a selection that skipped
+    ``discover_file`` would never end the loop; nothing has needed it yet.
     """
+    selected = {"step": step, "from_step": from_step, "to_step": to_step}
+    named = [f"--{key.replace('_', '-')}" for key, value in selected.items() if value]
+    if named:
+        raise ReyLoaderError(
+            f"workflow '{workflow_name}' runs once per discovered file and does "
+            f"not support step selection ({', '.join(named)})."
+        )
     processed = 0
     while processed < max_files:
         object.__setattr__(ctx, "current_file", None)
@@ -361,7 +374,9 @@ def run_file_workflow(ctx: Any, run_log: Any, adapter: Any, workflow_name: str, 
 
 
 def run_process_workflow(ctx: Any, run_log: Any, adapter: Any, workflow_name: str, *,
-                         apply: bool = True, source: str = "") -> int:
+                         apply: bool = True, source: str = "",
+                         step: str | None = None, from_step: str | None = None,
+                         to_step: str | None = None) -> int:
     """Execute one ordered workflow pass through the shared coordinator.
 
     Used for both a single-file pass (via ``run_file_workflow``) and a batch
@@ -370,7 +385,9 @@ def run_process_workflow(ctx: Any, run_log: Any, adapter: Any, workflow_name: st
     or sets ``ctx.no_file``; file-scoped steps (``config.scope: file``) are skipped
     when no file was found. ``source`` is loader-specific runtime input seeded into
     the run metadata (the shared coordinator never learns loader concepts); the
-    ``sql_apply`` process reads it. Returns 0 / 1.
+    ``sql_apply`` process reads it. ``step`` / ``from_step`` / ``to_step``
+    select one step or an inclusive range; the shared coordinator resolves them
+    against the workflow's ordered steps. Returns 0 / 1.
     """
     wf = _get_workflow(ctx, workflow_name)
     _require(wf, "steps", workflow_name)
@@ -382,6 +399,7 @@ def run_process_workflow(ctx: Any, run_log: Any, adapter: Any, workflow_name: st
     }
     registry = _guarded_registry(build_process_registry(adapter))
     run = coordinate_workflow(ctx, run_log, wf, registry, apply=apply,
+                              step=step, from_step=from_step, to_step=to_step,
                               metadata=metadata)
     if run.status != "success":
         failed = next((o for o in run.outcomes if o.status == "failed"), None)
