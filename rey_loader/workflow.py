@@ -40,6 +40,7 @@ from rey_lib.load.load_operation import load_one
 from rey_lib.files.file_utils import delete_file, move_file, visible_files
 from rey_lib.load.classify import run_source_file_classification
 from rey_lib.load.inventory import run_source_inventory
+from rey_lib.load.sanitize import run_file_sanitization
 from rey_lib.logs import get_logger
 from rey_lib.workflow import (
     RunContext,
@@ -194,9 +195,14 @@ def build_process_registry(adapter: Any) -> dict[str, Any]:
                               run: RunContext) -> StepResult:
         return _process_classify_source_files(ctx, run_log, config, run)
 
+    def sanitize_file(ctx: Any, run_log: Any, config: dict[str, Any],
+                      run: RunContext) -> StepResult:
+        return _process_sanitize_file(ctx, run_log, config, run)
+
     return {
         "inventory_source_files": inventory_source_files,
         "classify_source_files": classify_source_files,
+        "sanitize_file": sanitize_file,
         "file_operation": file_operation,
         "sql_operation": sql_operation,
         "validate": validate,
@@ -295,6 +301,18 @@ def _process_classify_source_files(ctx: Any, run_log: Any, config: dict[str, Any
         # have failed at.
         "failed" if result.candidates and not result.classified else "ok",
         detail,
+    )
+
+
+def _process_sanitize_file(ctx: Any, run_log: Any, config: dict[str, Any],
+                           run: RunContext) -> StepResult:
+    """Execute the explicit governed whole-file sanitization process."""
+    result = run_file_sanitization(ctx, run_log, config, apply=run.apply)
+    action = "Sanitized" if run.apply else "Would sanitize"
+    return StepResult(
+        "sanitize_file",
+        "ok",
+        f"{action} {result.selected} governed file(s).",
     )
 
 
