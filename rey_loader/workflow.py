@@ -38,6 +38,7 @@ from rey_lib.db.procedure_map import execute_mapped_routine
 from rey_lib.files.file_loader import transform_one, validate_one
 from rey_lib.load.load_operation import load_one
 from rey_lib.files.file_utils import delete_file, move_file, visible_files
+from rey_lib.load.classify import run_source_file_classification
 from rey_lib.load.inventory import run_source_inventory
 from rey_lib.logs import get_logger
 from rey_lib.workflow import (
@@ -189,8 +190,13 @@ def build_process_registry(adapter: Any) -> dict[str, Any]:
                                run: RunContext) -> StepResult:
         return _process_inventory_source_files(ctx, run_log, config, run)
 
+    def classify_source_files(ctx: Any, run_log: Any, config: dict[str, Any],
+                              run: RunContext) -> StepResult:
+        return _process_classify_source_files(ctx, run_log, config, run)
+
     return {
         "inventory_source_files": inventory_source_files,
+        "classify_source_files": classify_source_files,
         "file_operation": file_operation,
         "sql_operation": sql_operation,
         "validate": validate,
@@ -271,6 +277,25 @@ def _process_inventory_source_files(ctx: Any, run_log: Any, config: dict[str, An
             f"Source inventory returned exit code {result}.",
         )
     return StepResult("inventory_source_files", "ok", f"{len(sources)} source set(s)")
+
+
+def _process_classify_source_files(ctx: Any, run_log: Any, config: dict[str, Any],
+                                   run: RunContext) -> StepResult:
+    """Execute configured manifest-driven source-file classification."""
+    result = run_source_file_classification(ctx, run_log, config, run)
+    detail = (
+        f"Classified {result.classified} of {result.candidates} candidate(s); "
+        f"{result.rejected} rejected."
+    )
+    return StepResult(
+        "classify_source_files",
+        # CLASSIFIED NOTHING FAILS THE STEP; A REJECTION IS NOT A FAILURE. A file
+        # matching no pattern is not ours, and saying so is the step working.
+        # `result.candidates` guards it: handed nothing, there is nothing to
+        # have failed at.
+        "failed" if result.candidates and not result.classified else "ok",
+        detail,
+    )
 
 
 # ---------------------------------------------------------------------------
