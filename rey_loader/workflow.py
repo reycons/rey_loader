@@ -41,6 +41,9 @@ from rey_lib.files.file_utils import delete_file, move_file, visible_files
 from rey_lib.load.classify import run_source_file_classification
 from rey_lib.load.convert import ConversionError, run_excel_conversion
 from rey_lib.load.inventory import run_source_inventory
+from rey_lib.load.profile import run_record_type_profiling
+
+from rey_loader import __version__ as _LOADER_VERSION
 from rey_lib.load.sanitize import run_file_sanitization
 from rey_lib.logs import get_logger
 from rey_lib.workflow import (
@@ -204,7 +207,12 @@ def build_process_registry(adapter: Any) -> dict[str, Any]:
                          run: RunContext) -> StepResult:
         return _process_excel_conversion(ctx, run_log, config, run)
 
+    def profile_csv_record_types(ctx: Any, run_log: Any, config: dict[str, Any],
+                                 run: RunContext) -> StepResult:
+        return _process_profile_csv_record_types(ctx, run_log, config, run)
+
     return {
+        "profile_csv_record_types": profile_csv_record_types,
         "inventory_source_files": inventory_source_files,
         "classify_source_files": classify_source_files,
         "excel_conversion": excel_conversion,
@@ -331,6 +339,45 @@ def _process_excel_conversion(ctx: Any, run_log: Any, config: dict[str, Any],
             f"Excel conversion returned exit code {result}.",
         )
     return StepResult("excel_conversion", "ok", "inline configuration")
+
+
+def _process_profile_csv_record_types(ctx: Any, run_log: Any, config: dict[str, Any],
+                                      run: RunContext) -> StepResult:
+    """Profile every source the configured selection identifies."""
+    # The profiler's version is this application's, supplied here because the
+    # Loader-owned profiling in rey_lib cannot import it.
+    result = run_record_type_profiling(
+        ctx, run_log, config, apply=run.apply, profiler_version=_LOADER_VERSION)
+    if not result.selected:
+        return StepResult(
+            "profile_csv_record_types",
+            "ok",
+            f"No source selected from {result.records_read} manifest record(s).",
+        )
+    if not result.applied:
+        return StepResult(
+            "profile_csv_record_types",
+            "ok",
+            f"Would profile {result.selected} source(s) into the governed profile "
+            "library; nothing written.",
+        )
+    detail = (
+        f"Profiled {result.profiled} of {result.selected} source(s) into the "
+        "governed profile library."
+    )
+    if result.failures:
+        detail = (
+            f"{detail} {len(result.failures)} not profiled: "
+            f"{'; '.join(result.failures)}"
+        )
+    return StepResult(
+        "profile_csv_record_types",
+        # ANY failure fails the step. The step owns the whole selected set, so
+        # incomplete work is not success -- reporting ok because something else
+        # succeeded is how four unprofiled files rode through a green run.
+        "failed" if result.failures else "ok",
+        detail,
+    )
 
 
 def _process_sanitize_file(ctx: Any, run_log: Any, config: dict[str, Any],

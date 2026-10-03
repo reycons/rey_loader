@@ -683,6 +683,15 @@ WORKFLOW_OPERATIONS: list[dict[str, Any]] = [
         {"name": "include_empty_sheets", "required": False, "value_type": "flag",
          "description": "Convert sheets with no rows."},
     ),
+    # Copied from the legacy file_operator contract exactly (row 589, step 5).
+    _operation(
+        "profile_csv_record_types",
+        "Profile every sanitized file a routine selects.",
+        {"name": "file_selection", "required": True, "value_type": "mapping",
+         "description": "Routine naming this step's files, and the row field holding each path."},
+        {"name": "kickouts", "required": False, "value_type": "mapping",
+         "description": "Where files this step cannot handle go."},
+    ),
     # Copied from the legacy file_operator contract exactly (row 589, step 4).
     _operation(
         "sanitize_file",
