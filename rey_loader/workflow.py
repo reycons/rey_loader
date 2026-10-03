@@ -41,6 +41,7 @@ from rey_lib.files.file_utils import delete_file, move_file, visible_files
 from rey_lib.load.classify import run_source_file_classification
 from rey_lib.load.convert import ConversionError, run_excel_conversion
 from rey_lib.load.inventory import run_source_inventory
+from rey_lib.load.prepare import run_create_prepared_files
 from rey_lib.load.profile import run_record_type_profiling
 
 from rey_loader import __version__ as _LOADER_VERSION
@@ -211,7 +212,12 @@ def build_process_registry(adapter: Any) -> dict[str, Any]:
                                  run: RunContext) -> StepResult:
         return _process_profile_csv_record_types(ctx, run_log, config, run)
 
+    def create_prepared_files(ctx: Any, run_log: Any, config: dict[str, Any],
+                              run: RunContext) -> StepResult:
+        return _process_create_prepared_files(ctx, run_log, config, run)
+
     return {
+        "create_prepared_files": create_prepared_files,
         "profile_csv_record_types": profile_csv_record_types,
         "inventory_source_files": inventory_source_files,
         "classify_source_files": classify_source_files,
@@ -376,6 +382,31 @@ def _process_profile_csv_record_types(ctx: Any, run_log: Any, config: dict[str, 
         # incomplete work is not success -- reporting ok because something else
         # succeeded is how four unprofiled files rode through a green run.
         "failed" if result.failures else "ok",
+        detail,
+    )
+
+
+def _process_create_prepared_files(ctx: Any, run_log: Any, config: dict[str, Any],
+                                   run: RunContext) -> StepResult:
+    """Execute the governed prepared-file creation process.
+
+    One file's failure is that file's own; the step reports it and continues,
+    and only fails when nothing could be prepared. The batch result carries the
+    finer partial_success state for callers that read it directly.
+    """
+    result = run_create_prepared_files(ctx, run_log, config, apply=run.apply)
+    action = "Prepared" if run.apply else "Would prepare"
+    detail = f"{action} {result.prepared} of {result.selected} governed file(s)."
+    if result.failed:
+        failures = "; ".join(
+            f"{item.source_path or item.file_id}: {item.reason}"
+            for item in result.results
+            if item.status == "failed"
+        )
+        detail = f"{detail} {result.failed} failed: {failures}"
+    return StepResult(
+        "create_prepared_files",
+        "failed" if result.status == "failed" else "ok",
         detail,
     )
 

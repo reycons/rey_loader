@@ -93,7 +93,7 @@ def test_build_process_registry_exposes_generic_groups():
         "transform_files", "load_files", "validate_load", "sql_apply",
         # The inventory_and_prepare_files replacement (row 589).
         "inventory_source_files", "classify_source_files", "excel_conversion",
-        "sanitize_file", "profile_csv_record_types",
+        "sanitize_file", "profile_csv_record_types", "create_prepared_files",
     }
 
 

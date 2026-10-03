@@ -683,6 +683,23 @@ WORKFLOW_OPERATIONS: list[dict[str, Any]] = [
         {"name": "include_empty_sheets", "required": False, "value_type": "flag",
          "description": "Convert sheets with no rows."},
     ),
+    # The legacy file_operator contract (row 589, step 6), plus file_kickouts:
+    # where a FILE that cannot be prepared goes (rule 75). The step's own
+    # `kickouts` is the ROW-kickout JSONL and cannot also name that.
+    _operation(
+        "create_prepared_files",
+        "Create the final prepared file for each selected source.",
+        {"name": "file_selection", "required": True, "value_type": "mapping",
+         "description": "Routine naming this step's files, and the row field holding each path."},
+        {"name": "outbox", "required": True, "value_type": "mapping",
+         "description": "Where prepared files are written."},
+        {"name": "kickouts", "required": True, "value_type": "mapping",
+         "description": "Where rejected sources go."},
+        {"name": "preparation", "required": True, "value_type": "mapping",
+         "description": "How a prepared file is built."},
+        {"name": "file_kickouts", "required": False, "value_type": "mapping",
+         "description": "Where a file that cannot be prepared goes."},
+    ),
     # Copied from the legacy file_operator contract exactly (row 589, step 5).
     _operation(
         "profile_csv_record_types",
