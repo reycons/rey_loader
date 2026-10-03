@@ -637,6 +637,17 @@ WORKFLOW_OPERATIONS: list[dict[str, Any]] = [
          "description": "Which ETL operation this step performs."},
         _setting("data_source", "Data source whose declared paths and configs this reads."),
     ),
+    # The inventory_and_prepare_files replacement (row 589). The parameter
+    # contract is the legacy file_operator one, less file_insertion: the
+    # binding that records a file is FileManifest.inventory's own.
+    _operation(
+        "inventory_source_files",
+        "Inventory every configured source set into the governed manifest.",
+        {"name": "sources", "required": True, "value_type": "mapping",
+         "description": "The source sets this step enumerates."},
+        {"name": "kickouts", "required": False, "value_type": "mapping",
+         "description": "Where files this step cannot handle go."},
+    ),
     _operation("transform_files", "Transform every configured input file."),
     _operation("load_files", "Load every transformed file."),
     _operation("validate_load", "Validate what the load produced."),

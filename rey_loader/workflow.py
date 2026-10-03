@@ -38,6 +38,7 @@ from rey_lib.db.procedure_map import execute_mapped_routine
 from rey_lib.files.file_loader import transform_one, validate_one
 from rey_lib.load.load_operation import load_one
 from rey_lib.files.file_utils import delete_file, move_file, visible_files
+from rey_lib.load.inventory import run_source_inventory
 from rey_lib.logs import get_logger
 from rey_lib.workflow import (
     RunContext,
@@ -184,7 +185,12 @@ def build_process_registry(adapter: Any) -> dict[str, Any]:
     def sql_apply(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
         return _process_sql_apply(ctx, run_log, config, run)
 
+    def inventory_source_files(ctx: Any, run_log: Any, config: dict[str, Any],
+                               run: RunContext) -> StepResult:
+        return _process_inventory_source_files(ctx, run_log, config, run)
+
     return {
+        "inventory_source_files": inventory_source_files,
         "file_operation": file_operation,
         "sql_operation": sql_operation,
         "validate": validate,
@@ -243,6 +249,28 @@ def _process_sql_apply(ctx: Any, run_log: Any, config: dict[str, Any], run: RunC
     source = str(run.metadata.get("source", "") or "")
     run_sql_apply(ctx, run_log, source)
     return StepResult("sql_apply", "ok", f"source={source}")
+
+
+# ---------------------------------------------------------------------------
+# File workflow process handlers (row 589: the Loader replacement for the
+# inventory_and_prepare_files workflow). Each is thin: it calls the
+# Loader-owned implementation in rey_lib and reports the same StepResult the
+# legacy step reported.
+# ---------------------------------------------------------------------------
+
+def _process_inventory_source_files(ctx: Any, run_log: Any, config: dict[str, Any],
+                                    run: RunContext) -> StepResult:
+    """Execute the configured governed source-file inventory."""
+    del run
+    sources = config.get("sources") or []
+    result = run_source_inventory(ctx, run_log, config)
+    if result != 0:
+        return StepResult(
+            "inventory_source_files",
+            "failed",
+            f"Source inventory returned exit code {result}.",
+        )
+    return StepResult("inventory_source_files", "ok", f"{len(sources)} source set(s)")
 
 
 # ---------------------------------------------------------------------------
