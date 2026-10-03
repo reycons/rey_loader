@@ -39,6 +39,7 @@ from rey_lib.files.file_loader import transform_one, validate_one
 from rey_lib.load.load_operation import load_one
 from rey_lib.files.file_utils import delete_file, move_file, visible_files
 from rey_lib.load.classify import run_source_file_classification
+from rey_lib.load.convert import ConversionError, run_excel_conversion
 from rey_lib.load.inventory import run_source_inventory
 from rey_lib.load.sanitize import run_file_sanitization
 from rey_lib.logs import get_logger
@@ -199,9 +200,14 @@ def build_process_registry(adapter: Any) -> dict[str, Any]:
                       run: RunContext) -> StepResult:
         return _process_sanitize_file(ctx, run_log, config, run)
 
+    def excel_conversion(ctx: Any, run_log: Any, config: dict[str, Any],
+                         run: RunContext) -> StepResult:
+        return _process_excel_conversion(ctx, run_log, config, run)
+
     return {
         "inventory_source_files": inventory_source_files,
         "classify_source_files": classify_source_files,
+        "excel_conversion": excel_conversion,
         "sanitize_file": sanitize_file,
         "file_operation": file_operation,
         "sql_operation": sql_operation,
@@ -302,6 +308,29 @@ def _process_classify_source_files(ctx: Any, run_log: Any, config: dict[str, Any
         "failed" if result.candidates and not result.classified else "ok",
         detail,
     )
+
+
+def _process_excel_conversion(ctx: Any, run_log: Any, config: dict[str, Any],
+                              run: RunContext) -> StepResult:
+    """Execute one process-local Excel conversion configuration."""
+    if "config_ref" in config:
+        raise ConversionError(
+            "Loader workflow process 'excel_conversion' does not support "
+            "config_ref; supply its configuration inline."
+        )
+    if not config:
+        raise ConversionError(
+            "Loader workflow process 'excel_conversion' requires inline "
+            "configuration."
+        )
+    result = run_excel_conversion(ctx, run_log, config, apply=run.apply)
+    if result != 0:
+        return StepResult(
+            "excel_conversion",
+            "failed",
+            f"Excel conversion returned exit code {result}.",
+        )
+    return StepResult("excel_conversion", "ok", "inline configuration")
 
 
 def _process_sanitize_file(ctx: Any, run_log: Any, config: dict[str, Any],
