@@ -649,16 +649,12 @@ WORKFLOW_OPERATIONS: list[dict[str, Any]] = [
         "Inventory every configured source set into the governed manifest.",
         {"name": "sources", "required": True, "value_type": "mapping",
          "description": "The source sets this step enumerates."},
-        {"name": "kickouts", "required": False, "value_type": "mapping",
-         "description": "Where files this step cannot handle go."},
     ),
     _operation(
         "classify_source_files",
         "Classify inventoried files by their structural type.",
         {"name": "sources", "required": True, "value_type": "mapping",
          "description": "The classification sources, each with its own selection."},
-        {"name": "kickouts", "required": False, "value_type": "mapping",
-         "description": "Where files this step cannot handle go."},
     ),
     # Copied from the legacy file_operator contract exactly (row 589, step 3).
     _operation(
@@ -668,8 +664,6 @@ WORKFLOW_OPERATIONS: list[dict[str, Any]] = [
          "description": "Routine naming this step's files, and the row field holding each path."},
         {"name": "outbox", "required": True, "value_type": "mapping",
          "description": "Where converted files are written."},
-        {"name": "kickouts", "required": True, "value_type": "mapping",
-         "description": "Where rejected workbooks go."},
         {"name": "processing", "required": False, "value_type": "mapping",
          "description": "Working folder for the conversion."},
         {"name": "archive", "required": False, "value_type": "mapping",
@@ -683,9 +677,10 @@ WORKFLOW_OPERATIONS: list[dict[str, Any]] = [
         {"name": "include_empty_sheets", "required": False, "value_type": "flag",
          "description": "Convert sheets with no rows."},
     ),
-    # The legacy file_operator contract (row 589, step 6), plus file_kickouts:
-    # where a FILE that cannot be prepared goes (rule 75). The step's own
-    # `kickouts` is the ROW-kickout JSONL and cannot also name that.
+    # The legacy file_operator contract (row 589, step 6). `kickouts` is the
+    # ROW-kickout JSONL; a FILE that cannot be prepared goes to <inbox>/kickouts
+    # through Transform's common execution path and is declared nowhere
+    # (backlog 624).
     _operation(
         "create_prepared_files",
         "Create the final prepared file for each selected source.",
@@ -694,11 +689,9 @@ WORKFLOW_OPERATIONS: list[dict[str, Any]] = [
         {"name": "outbox", "required": True, "value_type": "mapping",
          "description": "Where prepared files are written."},
         {"name": "kickouts", "required": True, "value_type": "mapping",
-         "description": "Where rejected sources go."},
+         "description": "Where the excluded rows of a prepared file are written."},
         {"name": "preparation", "required": True, "value_type": "mapping",
          "description": "How a prepared file is built."},
-        {"name": "file_kickouts", "required": False, "value_type": "mapping",
-         "description": "Where a file that cannot be prepared goes."},
     ),
     # Copied from the legacy file_operator contract exactly (row 589, step 5).
     _operation(
@@ -706,8 +699,6 @@ WORKFLOW_OPERATIONS: list[dict[str, Any]] = [
         "Profile every sanitized file a routine selects.",
         {"name": "file_selection", "required": True, "value_type": "mapping",
          "description": "Routine naming this step's files, and the row field holding each path."},
-        {"name": "kickouts", "required": False, "value_type": "mapping",
-         "description": "Where files this step cannot handle go."},
     ),
     # Copied from the legacy file_operator contract exactly (row 589, step 4).
     _operation(
@@ -721,8 +712,6 @@ WORKFLOW_OPERATIONS: list[dict[str, Any]] = [
          "description": "What sanitizing this feed means."},
         {"name": "feed", "required": True, "value_type": "string",
          "description": "Feed whose sanitization policy applies."},
-        {"name": "kickouts", "required": False, "value_type": "mapping",
-         "description": "Where files this step cannot handle go."},
     ),
     _operation("transform_files", "Transform every configured input file."),
     _operation("load_files", "Load every transformed file."),

@@ -72,7 +72,8 @@ def test_a_dry_run_says_would_prepare(run_log) -> None:
     assert step.call_args.kwargs["apply"] is False
 
 
-def test_the_operation_is_published_with_the_legacy_contract_and_file_kickouts() -> None:
+def test_the_operation_is_published_with_the_legacy_contract() -> None:
+    """``kickouts`` is the ROW-kickout JSONL; no file kickout is declared (624)."""
     published = {op["name"]: op for op in WORKFLOW_OPERATIONS}["create_prepared_files"]
 
     assert [(p["name"], p["required"], p["value_type"]) for p in published["parameters"]] == [
@@ -80,6 +81,5 @@ def test_the_operation_is_published_with_the_legacy_contract_and_file_kickouts()
         ("outbox", True, "mapping"),
         ("kickouts", True, "mapping"),
         ("preparation", True, "mapping"),
-        ("file_kickouts", False, "mapping"),
         ("scope", False, "string"),
     ]

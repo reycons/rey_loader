@@ -49,5 +49,5 @@ def test_the_operation_is_published_with_the_legacy_contract() -> None:
     published = {op["name"]: op for op in WORKFLOW_OPERATIONS}["classify_source_files"]
 
     assert [(p["name"], p["required"]) for p in published["parameters"]] == [
-        ("sources", True), ("kickouts", False), ("scope", False),
+        ("sources", True), ("scope", False),
     ]

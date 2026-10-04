@@ -63,7 +63,6 @@ def test_the_operation_is_published_with_the_legacy_contract() -> None:
     assert [(p["name"], p["required"], p["value_type"]) for p in published["parameters"]] == [
         ("file_selection", True, "mapping"),
         ("outbox", True, "mapping"),
-        ("kickouts", True, "mapping"),
         ("processing", False, "mapping"),
         ("archive", False, "mapping"),
         ("name", False, "string"),

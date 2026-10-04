@@ -46,6 +46,5 @@ def test_the_operation_is_published_with_the_legacy_contract() -> None:
         ("outbox", True, "mapping"),
         ("sanitization", True, "mapping"),
         ("feed", True, "string"),
-        ("kickouts", False, "mapping"),
         ("scope", False, "string"),
     ]

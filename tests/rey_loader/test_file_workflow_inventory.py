@@ -41,7 +41,7 @@ def test_the_operation_is_published_with_the_legacy_contract_less_file_insertion
     published = {op["name"]: op for op in WORKFLOW_OPERATIONS}["inventory_source_files"]
 
     assert [(p["name"], p["required"]) for p in published["parameters"]] == [
-        ("sources", True), ("kickouts", False), ("scope", False),
+        ("sources", True), ("scope", False),
     ]
 
 
