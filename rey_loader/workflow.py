@@ -416,10 +416,17 @@ def _process_sanitize_file(ctx: Any, run_log: Any, config: dict[str, Any],
     """Execute the explicit governed whole-file sanitization process."""
     result = run_file_sanitization(ctx, run_log, config, apply=run.apply)
     action = "Sanitized" if run.apply else "Would sanitize"
+    detail = f"{action} {result.selected - len(result.failures)} governed file(s)."
+    if result.failures:
+        detail = (
+            f"{detail} {len(result.failures)} not sanitized, each kicked out: "
+            f"{'; '.join(result.failures)}"
+        )
     return StepResult(
         "sanitize_file",
-        "ok",
-        f"{action} {result.selected} governed file(s).",
+        # As profile: ANY failure fails the step; the rest of the batch still ran.
+        "failed" if result.failures else "ok",
+        detail,
     )
 
 
