@@ -20,8 +20,7 @@ def _item(*, failed: bool = False) -> PreparedFileResult:
     return PreparedFileResult(
         file_id=7, source_path="/data/bny/work/sanitized_csv/a.csv",
         prepared_path="" if failed else "/data/bny/work/prepared/a.csv",
-        kickout_path=None, prepared_redacted_path=None, kickout_redacted_path=None,
-        included_rows=0 if failed else 2, excluded_rows=0, header_mapping=(),
+        included_rows=0 if failed else 2, header_mapping=(),
         applied=not failed, status="failed" if failed else "success",
         reason="no profile" if failed else "",
     )
@@ -72,14 +71,14 @@ def test_a_dry_run_says_would_prepare(run_log) -> None:
     assert step.call_args.kwargs["apply"] is False
 
 
-def test_the_operation_is_published_with_the_legacy_contract() -> None:
-    """``kickouts`` is the ROW-kickout JSONL; no file kickout is declared (624)."""
+def test_the_operation_is_published_with_its_contract() -> None:
+    """One implementation for both prepared files: ``output`` says which (614)."""
     published = {op["name"]: op for op in WORKFLOW_OPERATIONS}["create_prepared_files"]
 
     assert [(p["name"], p["required"], p["value_type"]) for p in published["parameters"]] == [
         ("file_selection", True, "mapping"),
         ("outbox", True, "mapping"),
-        ("kickouts", True, "mapping"),
         ("preparation", True, "mapping"),
+        ("output", False, "choice"),
         ("scope", False, "string"),
     ]

@@ -677,21 +677,20 @@ WORKFLOW_OPERATIONS: list[dict[str, Any]] = [
         {"name": "include_empty_sheets", "required": False, "value_type": "flag",
          "description": "Convert sheets with no rows."},
     ),
-    # The legacy file_operator contract (row 589, step 6). `kickouts` is the
-    # ROW-kickout JSONL; a FILE that cannot be prepared goes to <inbox>/kickouts
-    # through Transform's common execution path and is declared nowhere
-    # (backlog 624).
+    # Transform(prepare, output="clear" | "redacted") (backlog 614): one
+    # implementation; a process says which prepared file it writes.
     _operation(
         "create_prepared_files",
-        "Create the final prepared file for each selected source.",
+        "Create the prepared file, clear or redacted, for each selected source.",
         {"name": "file_selection", "required": True, "value_type": "mapping",
          "description": "Routine naming this step's files, and the row field holding each path."},
         {"name": "outbox", "required": True, "value_type": "mapping",
          "description": "Where prepared files are written."},
-        {"name": "kickouts", "required": True, "value_type": "mapping",
-         "description": "Where the excluded rows of a prepared file are written."},
         {"name": "preparation", "required": True, "value_type": "mapping",
          "description": "How a prepared file is built."},
+        {"name": "output", "required": False, "value_type": "choice",
+         "possible_values": ["clear", "redacted"],
+         "description": "Which prepared file this process writes; clear by default."},
     ),
     # Copied from the legacy file_operator contract exactly (row 589, step 5).
     _operation(
