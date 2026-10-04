@@ -253,7 +253,7 @@ _COMMANDS: list[dict[str, Any]] = [
             # modes rather than expressing "one of these two" -- so marking
             # either would refuse a caller that legitimately gave the other.
             # The rule belongs to the pair, and the contract that reads them
-            # already enforces it: control.f_file_source_context_get refuses a
+            # already enforces it: control.f_file_manifest_get refuses a
             # call that supplies neither, by name.
             {
                 "name": "file-manifest-id",
