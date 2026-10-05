@@ -354,8 +354,10 @@ class TestTheClosedVocabularies:
         assert parameters("load")["file-type"]["placeholder"] == "Auto detect"
 
     def test_connection_is_a_resolved_collection(self) -> None:
+        # Database connections only (backlog 673): a load's source and
+        # destination are databases, and an http connection is not one.
         assert parameters("load")["connection"]["possible_values_from"] == (
-            "connections"
+            "database_connections"
         )
 
     def test_data_source_is_deliberately_NOT_one(self) -> None:

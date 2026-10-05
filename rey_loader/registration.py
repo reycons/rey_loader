@@ -323,7 +323,7 @@ _COMMANDS: list[dict[str, Any]] = [
                     _LOAD_SHAPE: [_QUERY, _QUERY_FILE, _QUERY_TO_FILE],
                 },
                 "value_type": "choice",
-                "possible_values_from": "connections",
+                "possible_values_from": "database_connections",
                 "description": "The connection the SOURCE statement runs on. "
                                "The destination has its own, and they may "
                                "differ.",
@@ -416,7 +416,7 @@ _COMMANDS: list[dict[str, Any]] = [
                 "required_when": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
                 "mode_membership": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
                 "value_type": "choice",
-                "possible_values_from": "connections",
+                "possible_values_from": "database_connections",
                 "description": "The connection the DESTINATION is reached "
                                "through.",
             },
