@@ -37,8 +37,8 @@ def test_a_rejection_is_not_a_failure(run_log) -> None:
     assert _run(run_log, 4, 1).status == "ok"
 
 
-def test_classifying_nothing_of_something_fails_the_step(run_log) -> None:
-    assert _run(run_log, 2, 0).status == "failed"
+def test_every_file_rejected_is_not_a_failure(run_log) -> None:
+    assert _run(run_log, 2, 0).status == "ok"
 
 
 def test_no_candidates_is_ok(run_log) -> None:

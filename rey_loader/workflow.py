@@ -315,11 +315,10 @@ def _process_classify_source_files(ctx: Any, run_log: Any, config: dict[str, Any
     )
     return StepResult(
         "classify_source_files",
-        # CLASSIFIED NOTHING FAILS THE STEP; A REJECTION IS NOT A FAILURE. A file
-        # matching no pattern is not ours, and saying so is the step working.
-        # `result.candidates` guards it: handed nothing, there is nothing to
-        # have failed at.
-        "failed" if result.candidates and not result.classified else "ok",
+        # A REJECTION IS NEVER A FAILURE, even when every file is rejected. A
+        # file matching no pattern is not ours: it is moved to kickouts and
+        # recorded, and the run continues. Saying so is the step working.
+        "ok",
         detail,
     )
 
