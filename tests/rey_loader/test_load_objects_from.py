@@ -37,6 +37,21 @@ class TestEachArgumentGoesToItsObject:
         assert set(rey_loader_main._TRANSFORM_ARGUMENTS.values()) == set(TRANSFORM_PARAMETERS)
         assert set(rey_loader_main._TARGET_ARGUMENTS.values()) == set(TARGET_PARAMETERS)
 
+    def test_the_http_arguments_build_an_http_transform(self) -> None:
+        # Backlog 668: the three land under the Transform's http fields, and
+        # the Transform's own rule puts the http kind in force.
+        _source, transform, _target = rey_loader_main._load_objects_from(_args(
+            file="/in.csv", table="s.t", connection="c",
+            http_connection="openfigi", http_adapter="openfigi",
+            http_options='{"id_column": "symbol", "id_type": "TICKER", "batch_size": 100}',
+        ))
+
+        assert transform.selected_kind() == "http"
+        assert transform.executed_declaration() == {
+            "connection": "openfigi", "adapter": "openfigi",
+            "options": {"id_column": "symbol", "id_type": "TICKER", "batch_size": 100},
+        }
+
     def test_values_land_under_their_fields_and_no_kind_is_chosen(self) -> None:
         source, transform, target = rey_loader_main._load_objects_from(_args(
             statement="select 1", source_connection="w", table="s.t",

@@ -400,6 +400,42 @@ _COMMANDS: list[dict[str, Any]] = [
                                "giving it inline.",
             },
             {
+                "name": "http-connection",
+                "load_object": _TRANSFORM,
+                "required": False,
+                "mode_membership": {
+                    _LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE, _QUERY_TO_FILE],
+                },
+                "value_type": "choice",
+                "possible_values_from": "http_connections",
+                "description": "An http transform: the configured HTTP "
+                               "connection the records are sent through.",
+            },
+            {
+                "name": "http-adapter",
+                "load_object": _TRANSFORM,
+                "required": False,
+                "mode_membership": {
+                    _LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE, _QUERY_TO_FILE],
+                },
+                "value_type": "choice",
+                "possible_values_from": "http_transform_adapters",
+                "description": "The registered adapter that turns the records "
+                               "into the provider's requests and back.",
+            },
+            {
+                "name": "http-options",
+                "load_object": _TRANSFORM,
+                "required": False,
+                "mode_membership": {
+                    _LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE, _QUERY_TO_FILE],
+                },
+                "value_type": "string",
+                "placeholder": '{"id_column": ..., "id_type": ...}',
+                "description": "The adapter's options, as JSON. Their meaning "
+                               "and validation are the adapter's.",
+            },
+            {
                 "name": "table",
                 "load_object": _DESTINATION,
                 "required": False,
