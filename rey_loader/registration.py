@@ -436,6 +436,18 @@ _COMMANDS: list[dict[str, Any]] = [
                                "and validation are the adapter's.",
             },
             {
+                "name": "http-transform",
+                "load_object": _TRANSFORM,
+                "required": False,
+                "mode_membership": {
+                    _LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE, _QUERY_TO_FILE],
+                },
+                "value_type": "string",
+                "placeholder": "columns: [{name: ..., source: ...}]",
+                "description": "The column mapping applied to the records before "
+                               "they are sent. Omit it to send them as they are.",
+            },
+            {
                 "name": "table",
                 "load_object": _DESTINATION,
                 "required": False,

@@ -50,6 +50,21 @@ class TestEachArgumentGoesToItsObject:
         assert transform.executed_declaration() == {
             "connection": "openfigi", "adapter": "openfigi",
             "options": {"id_column": "symbol", "id_type": "TICKER", "batch_size": 100},
+            "declaration": None,
+        }
+
+    def test_http_transform_is_the_mapping_applied_before_sending(self) -> None:
+        # Backlog 679: --http-transform lands under the Transform's field and
+        # becomes the http kind's authored mapping.
+        _source, transform, _target = rey_loader_main._load_objects_from(_args(
+            file="/in.csv", table="s.t", connection="c",
+            http_connection="openfigi", http_adapter="openfigi",
+            http_transform='{"columns": [{"source": "cusip", "name": "lookup_id"}]}',
+        ))
+
+        assert transform.selected_kind() == "http"
+        assert transform.executed_declaration()["declaration"] == {
+            "columns": [{"source": "cusip", "name": "lookup_id"}],
         }
 
     def test_values_land_under_their_fields_and_no_kind_is_chosen(self) -> None:

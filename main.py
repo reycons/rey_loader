@@ -273,7 +273,7 @@ _SOURCE_ARGUMENTS: dict[str, str] = {
 _TRANSFORM_ARGUMENTS: dict[str, str] = {
     "transform": "transform", "transform_file": "transform-file",
     "http_connection": "http-connection", "http_adapter": "http-adapter",
-    "http_options": "http-options",
+    "http_options": "http-options", "http_transform": "http-transform",
 }
 _TARGET_ARGUMENTS: dict[str, str] = {
     "table": "table", "connection": "connection", "out_file": "out-file",
@@ -551,6 +551,13 @@ def _parse_args() -> argparse.Namespace:
         default="",
         help="With load --http-connection: the adapter's options as JSON. "
              "Their meaning and validation are the adapter's.",
+    )
+    parser.add_argument(
+        "--http-transform",
+        dest="http_transform",
+        default="",
+        help="With load --http-connection: the column mapping applied to the "
+             "records before they are sent, as --transform's declaration is.",
     )
     parser.add_argument(
         "--out-file",
