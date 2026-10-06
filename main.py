@@ -403,6 +403,12 @@ def _check_load_arguments(args: argparse.Namespace) -> None:
             "directly."
         )
 
+    # --data-source NAMES HOW A FILE IS LOADED, and nothing else (backlog
+    # 288): its one use is run_load_one beside --file. Alone it fell through
+    # to every configured load, with the source it named ignored.
+    if args.data_source and not args.file:
+        raise ReyLoaderError("--data-source names how a file is loaded; add --file.")
+
 
 def _parse_args() -> argparse.Namespace:
     """Parse and validate CLI arguments.

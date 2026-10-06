@@ -122,6 +122,14 @@ class TestIncompleteFormsAreRefusedByTheObjects:
         assert "--data-source" in str(raised.value)
         assert "--table" in str(raised.value)
 
+    def test_a_data_source_without_a_file_is_refused(self, canonical) -> None:
+        """Backlog 288: --data-source names how a FILE is loaded; alone it loaded every source."""
+        with pytest.raises(ReyLoaderError) as raised:
+            canonical.run(_args(data_source="d"))
+
+        assert str(raised.value) == "--data-source names how a file is loaded; add --file."
+        assert canonical.calls == []
+
     def test_direct_options_without_a_source(self, canonical) -> None:
         """A destination but nothing to put in it: the Source says what it needs."""
         with pytest.raises(ConfigError) as raised:
