@@ -140,7 +140,8 @@ class TestExitBehaviourIsUnchanged:
 
         assert exc.value.code == 3
 
-    def test_an_app_error_is_logged_and_raised(self, monkeypatch) -> None:
+    def test_an_app_error_propagates_as_itself(self, monkeypatch) -> None:
+        """No local wrapper: the AppError reaches app_runtime unchanged (rule 79)."""
         from rey_lib.errors.error_utils import AppError
 
         failure = AppError("boom")
@@ -154,7 +155,7 @@ class TestExitBehaviourIsUnchanged:
             with pytest.raises(AppError) as exc:
                 loader_main.main()
 
-        assert exc.value.__cause__ is failure
+        assert exc.value is failure
         assert collected == ["finalized:run.jsonl"]
 
     def test_an_unexpected_error_is_logged_and_raised_as_an_app_error(

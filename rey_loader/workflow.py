@@ -534,8 +534,10 @@ def run_process_workflow(ctx: Any, run_log: Any, adapter: Any, workflow_name: st
                               metadata=metadata)
     if run.status != "success":
         failed = next((o for o in run.outcomes if o.status == "failed"), None)
-        _logger.error("workflow '%s' failed at step: %s",
-                      workflow_name, failed.id if failed else "?")
+        # Status: the workflow owns its failed step and reported it; the
+        # non-zero exit marks this run failed (rule 79).
+        _logger.warning("workflow '%s' failed at step: %s",
+                        workflow_name, failed.id if failed else "?")
         return 1
     _logger.info("workflow '%s' pass complete (%s).",
                  workflow_name, "apply" if apply else "dry-run")

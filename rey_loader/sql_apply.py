@@ -22,6 +22,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
+from rey_lib.errors.error_utils import AppError
 from rey_lib.encryption import sha256_file
 from rey_lib.config.config_utils import Namespace
 from rey_lib.db.connection import shared_connection
@@ -169,18 +170,22 @@ def _execute_files(
                 connection_name=conn_name,
                 checksum=checksum,
             )
-        except Exception as exc:  # noqa: BLE001 — logged and re-classified
+        except Exception as exc:  # noqa: BLE001 — re-classified, then propagated or reported
             failures += 1
-            _logger.error(
-                "sql apply FAILED: run_id=%s pipeline=%s step=%s file=%s "
-                "connection=%s error=%s",
-                run_id, pipeline, step_name, sql_file.name, conn_name,
-                exc,
-            )
             if stop_on_error:
+                # Propagated, so not reported here: the boundary reports it.
+                # The exception text stays on the cause (rule 79).
                 raise DatabaseError(
-                    f"sql apply '{source}': {sql_file.name} failed: {exc}"
+                    f"sql apply '{source}': {sql_file.name} failed"
                 ) from exc
+            # Consumed -- the next file still applies -- so reported here, as
+            # the one AppError that represents this file's failure (rule 79).
+            error = exc if isinstance(exc, AppError) else DatabaseError(
+                f"sql apply '{source}': {sql_file.name} failed")
+            if error is not exc:
+                error.__cause__ = exc
+            error.report(f"applying {sql_file.name} on connection {conn_name}",
+                         source=__name__)
             continue
         _logger.info(
             "sql apply ok: run_id=%s pipeline=%s step=%s file=%s "

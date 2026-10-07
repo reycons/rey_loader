@@ -29,7 +29,6 @@ preparse_config_args()
 
 from rey_lib.config.bootstrap import app_runtime
 from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_from_args
-from rey_lib.errors.error_utils import AppError
 from rey_lib.logs import get_logger
 from rey_lib.run_lifecycle import run_app_operation
 from rey_lib.logs import finalize_run_log
@@ -94,14 +93,8 @@ def main() -> None:
             log.info("rey_loader complete.")
             sys.exit(code)
 
-        except AppError as exc:
-            log.error("rey_loader pipeline error: %s", exc, exc_info=exc)
-            raise AppError(f"rey_loader pipeline error: {exc}") from exc
-
-        except Exception as exc:  # noqa: BLE001  — top-level safety net only
-            log.error("Unexpected error in rey_loader: %s", exc, exc_info=exc)
-            raise AppError(f"Unexpected error in rey_loader: {exc}") from exc
-
+        # A failure propagates as its own AppError; app_runtime normalises
+        # anything else and reports it once (rule 79).
         finally:
             # Top-level owner (standalone run, not a pipeline step) explicitly creates
             # the RESULTS_SUMMARY after its final RUN_COMPLETE — on success or failure.
