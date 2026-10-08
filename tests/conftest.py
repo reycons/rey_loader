@@ -69,7 +69,6 @@ def ctx(tmp_path: Path) -> Namespace:
     data_source = _make_advantage_data_source(paths)
 
     return _ns({
-        "log_depth":        0,
         "log_file":         str(tmp_path / "test.log"),
         "cli_call":         "pytest",                 # stand-in for sys.argv
         "batch_id":         None,
