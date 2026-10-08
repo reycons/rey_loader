@@ -33,6 +33,22 @@ def _calls_to(name: str) -> list[int]:
             and getattr(n.func, "id", getattr(n.func, "attr", "")) == name]
 
 
+def _configured_logging(monkeypatch: Any, tmp_path: Any) -> None:
+    """What the real build_ctx_for_app leaves for the run log: its logging writer.
+
+    The JSONL file is ``run.jsonl`` in the test's own directory, never the
+    repository's -- the test runs from ``tmp_path``.
+    """
+    from rey_lib.logs.app_logger import AppLogger
+    from rey_lib.logs.log_record_builder import LogRecordBuilder
+    from rey_lib.logs.log_writer import JsonLogWriter, LogWriter
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(AppLogger, "_writer", LogWriter("jsonl", json=JsonLogWriter("run.jsonl")))
+    monkeypatch.setattr(AppLogger, "_builder", LogRecordBuilder(
+        run_id="00000000-0000-4000-8000-000000000001", run_timestamp="20260822_000000"))
+
+
 class TestTheEntryPointUsesTheCommonBoundary:
     """Structure, asserted on the source rather than inferred."""
 
@@ -83,9 +99,15 @@ class TestTheBoundaryEnclosesFinalization:
 class TestExitBehaviourIsUnchanged:
     """The process still ends the way it did."""
 
+    @pytest.fixture(autouse=True)
+    def _in_tmp(self, tmp_path: Any) -> None:
+        self._tmp_path = tmp_path
+
     def _run(self, monkeypatch, *, command_result=None, raises=None) -> Any:
         """Drive main() with bootstrap and command execution stubbed out."""
         from rey_lib.config import bootstrap
+
+        _configured_logging(monkeypatch, self._tmp_path)
 
         collected: list[str] = []
 
@@ -181,8 +203,10 @@ class TestCollectionHappensAfterFinalization:
     """Shared objects stay live until the block exits."""
 
     def test_connections_are_live_during_finalization_and_closed_after(
-            self, monkeypatch) -> None:
+            self, monkeypatch, tmp_path) -> None:
         from rey_lib.config import bootstrap
+
+        _configured_logging(monkeypatch, tmp_path)
         from rey_lib.db import connection as connection_module
         from rey_lib.runtime import register_runtime_object
 
