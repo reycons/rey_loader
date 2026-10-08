@@ -42,14 +42,14 @@ class TestEachArgumentGoesToItsObject:
         # the Transform's own rule puts the http kind in force.
         _source, transform, _target = rey_loader_main._load_objects_from(_args(
             file="/in.csv", table="s.t", connection="c",
-            http_connection="openfigi", http_adapter="openfigi",
-            http_options='{"id_column": "symbol", "id_type": "TICKER", "batch_size": 100}',
+            http_connection="web", http_adapter="lookup",
+            http_options='{"id_column": "symbol", "id_type": "CODE_A", "batch_size": 100}',
         ))
 
         assert transform.selected_kind() == "http"
         assert transform.executed_declaration() == {
-            "connection": "openfigi", "adapter": "openfigi",
-            "options": {"id_column": "symbol", "id_type": "TICKER", "batch_size": 100},
+            "connection": "web", "adapter": "lookup",
+            "options": {"id_column": "symbol", "id_type": "CODE_A", "batch_size": 100},
             "declaration": None,
         }
 
@@ -58,7 +58,7 @@ class TestEachArgumentGoesToItsObject:
         # becomes the http kind's authored mapping.
         _source, transform, _target = rey_loader_main._load_objects_from(_args(
             file="/in.csv", table="s.t", connection="c",
-            http_connection="openfigi", http_adapter="openfigi",
+            http_connection="web", http_adapter="lookup",
             http_transform='{"columns": [{"source": "cusip", "name": "lookup_id"}]}',
         ))
 
