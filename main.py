@@ -29,7 +29,7 @@ preparse_config_args()
 
 from rey_lib.config.bootstrap import app_runtime
 from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_from_args
-from rey_lib.logs import get_logger
+from rey_lib.logs import AppLogger
 from rey_lib.run_lifecycle import run_app_operation
 from rey_lib.logs import finalize_run_log
 from rey_lib.workflow.cli import add_workflow_selection_args, workflow_selection
@@ -80,7 +80,7 @@ def main() -> None:
     # it created. It encloses the finally below so the run log is finalized
     # while those objects are still live, and collection happens after.
     with app_runtime(ctx=ctx, operation=operation) as (ctx, run_log):
-        log = get_logger(__name__)
+        log = AppLogger(__name__)
         log.info("rey_loader starting — command=%s (mode=%s)",
                  operation, "apply" if apply else "dry-run")
 

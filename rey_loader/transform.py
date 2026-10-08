@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from rey_lib.config.config_utils import Namespace
 from rey_lib.files.file_loader import run_transform as _run_transform
-from rey_lib.logs import get_logger
+from rey_lib.logs import AppLogger
 
 __all__ = ["run_transform"]
 
-_logger = get_logger(__name__)
+_logger = AppLogger(__name__)
 
 
 def run_transform(ctx: Namespace, run_log: object) -> int:

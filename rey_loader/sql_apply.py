@@ -28,11 +28,11 @@ from rey_lib.config.config_utils import Namespace
 from rey_lib.db.connection import shared_connection
 from rey_lib.db.db_adapter import DBAdapter
 from rey_lib.db.procedure_map import execute_sql_text
-from rey_lib.logs import get_logger
+from rey_lib.logs import AppLogger
 
 from rey_loader.error_utils import ConfigError, DatabaseError
 
-_logger = get_logger(__name__)
+_logger = AppLogger(__name__)
 
 # Module-level DBAdapter instance. All DB calls in this module go through it.
 _db_adapter = DBAdapter()

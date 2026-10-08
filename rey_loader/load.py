@@ -17,13 +17,13 @@ from rey_lib.config.config_utils import Namespace
 from rey_lib.load import Source, Target, Transform, run_selected_load
 from rey_lib.load.load_operation import load_one as _load_one
 from rey_lib.load.load_operation import run_load as _run_load
-from rey_lib.logs import get_logger
+from rey_lib.logs import AppLogger
 
 from rey_loader.error_utils import ReyLoaderError
 
 __all__ = ["run_load", "run_load_objects", "run_load_one"]
 
-_logger = get_logger(__name__)
+_logger = AppLogger(__name__)
 
 def run_load(ctx: Namespace) -> int:
     """Run the load stage for all configured data sources.

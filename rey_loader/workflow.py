@@ -46,7 +46,7 @@ from rey_lib.load.profile import run_record_type_profiling
 
 from rey_loader import __version__ as _LOADER_VERSION
 from rey_lib.load.sanitize import run_file_sanitization
-from rey_lib.logs import get_logger
+from rey_lib.logs import AppLogger
 from rey_lib.workflow import (
     RunContext,
     StepResult,
@@ -66,7 +66,7 @@ __all__ = [
     "is_process_workflow",
 ]
 
-_logger = get_logger(__name__)
+_logger = AppLogger(__name__)
 
 CONTRACT = "SGC_Rey_Loader_Internal_Workflow_Refactor"
 
