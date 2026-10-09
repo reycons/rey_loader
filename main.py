@@ -265,8 +265,7 @@ _SOURCE_ARGUMENTS: dict[str, str] = {
 }
 _TRANSFORM_ARGUMENTS: dict[str, str] = {
     "transform": "transform", "transform_file": "transform-file",
-    "http_connection": "http-connection", "http_adapter": "http-adapter",
-    "http_options": "http-options", "http_transform": "http-transform",
+    "http_adapter": "http-adapter", "http_transform": "http-transform",
 }
 _TARGET_ARGUMENTS: dict[str, str] = {
     "table": "table", "connection": "connection", "out_file": "out-file",
@@ -530,32 +529,17 @@ def _parse_args() -> argparse.Namespace:
              "from somewhere it can be version-controlled and reviewed.",
     )
     parser.add_argument(
-        "--http-connection",
-        dest="http_connection",
-        default="",
-        help="With load: an http transform -- the configured HTTP connection "
-             "the records are sent through.",
-    )
-    parser.add_argument(
         "--http-adapter",
         dest="http_adapter",
         default="",
-        help="With load --http-connection: the registered HTTP transform "
-             "adapter that turns the records into the provider's requests "
-             "and its answers back into records.",
-    )
-    parser.add_argument(
-        "--http-options",
-        dest="http_options",
-        default="",
-        help="With load --http-connection: the adapter's options as JSON. "
-             "Their meaning and validation are the adapter's.",
+        help="With load: an http transform -- the governed HTTP operation the "
+             "records are sent through, by its adapter key.",
     )
     parser.add_argument(
         "--http-transform",
         dest="http_transform",
         default="",
-        help="With load --http-connection: the column mapping applied to the "
+        help="With load --http-adapter: the column mapping applied to the "
              "records before they are sent, as --transform's declaration is.",
     )
     parser.add_argument(

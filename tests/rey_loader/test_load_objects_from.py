@@ -38,27 +38,20 @@ class TestEachArgumentGoesToItsObject:
         assert set(rey_loader_main._TARGET_ARGUMENTS.values()) == set(TARGET_PARAMETERS)
 
     def test_the_http_arguments_build_an_http_transform(self) -> None:
-        # Backlog 668: the three land under the Transform's http fields, and
-        # the Transform's own rule puts the http kind in force.
+        # Backlogs 668, 813: the operation lands under the Transform's http
+        # field, and the Transform's own rule puts the http kind in force.
         _source, transform, _target = rey_loader_main._load_objects_from(_args(
-            file="/in.csv", table="s.t", connection="c",
-            http_connection="web", http_adapter="lookup",
-            http_options='{"id_column": "symbol", "id_type": "CODE_A", "batch_size": 100}',
+            file="/in.csv", table="s.t", connection="c", http_adapter="lookup",
         ))
 
         assert transform.selected_kind() == "http"
-        assert transform.executed_declaration() == {
-            "connection": "web", "adapter": "lookup",
-            "options": {"id_column": "symbol", "id_type": "CODE_A", "batch_size": 100},
-            "declaration": None,
-        }
+        assert transform.executed_declaration() == {"adapter": "lookup", "declaration": None}
 
     def test_http_transform_is_the_mapping_applied_before_sending(self) -> None:
         # Backlog 679: --http-transform lands under the Transform's field and
         # becomes the http kind's authored mapping.
         _source, transform, _target = rey_loader_main._load_objects_from(_args(
-            file="/in.csv", table="s.t", connection="c",
-            http_connection="web", http_adapter="lookup",
+            file="/in.csv", table="s.t", connection="c", http_adapter="lookup",
             http_transform='{"columns": [{"source": "cusip", "name": "lookup_id"}]}',
         ))
 
