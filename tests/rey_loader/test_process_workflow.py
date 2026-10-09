@@ -217,12 +217,16 @@ def test_sql_operation_delegates_to_db_utils(run_log):
               "params": {"batch_name": "B"}}
     adapter = MagicMock()
     with patch("rey_loader.workflow.shared_connection") as shared, \
-         patch("rey_loader.workflow.execute_mapped_routine") as emr:
+         patch("rey_loader.workflow.get_procedure_map") as get_map, \
+         patch("rey_loader.workflow.ProcedureMap") as procedure_map:
         shared.return_value.handle.return_value = "conn"
         result = _process_sql_operation(ctx, run_log, config, RunContext(), adapter)
-    args, kwargs = emr.call_args
-    assert args[3] == "control" and args[4] == "start_batch"
-    assert kwargs.get("run_ctx") is ctx
+    # The action resolves once from the named map, then executes (backlog 822).
+    args, _ = procedure_map.resolve.call_args
+    assert args == ("conn", get_map.return_value, "control", "start_batch")
+    call_args, call_kwargs = procedure_map.resolve.return_value.call.call_args
+    assert call_args == ("conn", {"batch_name": "B"}, run_log)
+    assert call_kwargs.get("run_ctx") is ctx
     assert result.status == "ok"
 
 
@@ -233,7 +237,8 @@ def test_sql_operation_resolves_the_connection_the_step_names(run_log):
               "connection": "control_test", "routine_binding": "start_batch"}
     adapter = MagicMock()
     with patch("rey_loader.workflow.shared_connection") as shared, \
-         patch("rey_loader.workflow.execute_mapped_routine"):
+         patch("rey_loader.workflow.get_procedure_map"), \
+         patch("rey_loader.workflow.ProcedureMap"):
         _process_sql_operation(ctx, run_log, config, RunContext(), adapter)
     # Taken by the name the step gave, not by the map's name. It is the shared
     # object, so the step opens nothing of its own.

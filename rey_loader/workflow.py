@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from rey_lib.db.connection import shared_connection
-from rey_lib.db.procedure_map import execute_mapped_routine
+from rey_lib.db.procedure_map import ProcedureMap, get_procedure_map
 from rey_lib.files.file_loader import transform_one, validate_one
 from rey_lib.load.load_operation import load_one
 from rey_lib.files.file_utils import delete_file, move_file, visible_files
@@ -569,8 +569,8 @@ def _process_sql_operation(ctx: Any, run_log: Any, config: dict[str, Any], run: 
                            adapter: Any) -> StepResult:
     """Execute a control routine binding via the rey_lib DB utility layer.
 
-    Delegates entirely to ``execute_mapped_routine`` — no routine-binding
-    internals are parsed here. Runtime values come from the step config plus the
+    Delegates entirely to ``ProcedureMap`` — no routine-binding internals are
+    parsed here. Runtime values come from the step config plus the
     run context (batch_id/step ids loaded back onto ctx by the DB utility).
     """
     operation = str(_get(config, "operation", ""))
@@ -597,8 +597,10 @@ def _process_sql_operation(ctx: Any, run_log: Any, config: dict[str, Any], run: 
     values = dict(_plain_dict(params))
     conn = shared_connection(ctx, str(connection)).handle()
     # Not closed: shared, and held by every other consumer of this name.
-    execute_mapped_routine(ctx, run_log, conn, str(procedure_map), str(routine),
-                           values, run_ctx=ctx)
+    procedure = ProcedureMap.resolve(
+        conn, get_procedure_map(ctx, str(procedure_map)), str(procedure_map), str(routine),
+    )
+    procedure.call(conn, values, run_log, run_ctx=ctx)
     return StepResult(f"sql:{routine}", "ok", str(routine))
 
 
