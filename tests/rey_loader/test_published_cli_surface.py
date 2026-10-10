@@ -53,7 +53,7 @@ CONSUMED: dict[str, set[str]] = {
     "load": {"file", "data-source", "statement", "sql-file",
              "source-connection", "transform", "transform-file",
              # An http transform's two (backlogs 668, 813).
-             "http-adapter", "http-transform",
+             "http-adapter", "http-transform", "http-request",
              "table", "connection", "create", "replace", "recreate", "append",
              "out-file", "file-type", "dry-run",
              # The governed file, by identity. Three because they are three
@@ -134,7 +134,7 @@ class TestTheRecipesInvariants:
         assert declared == {
             "workflow", "source", "file", "data-source", "statement",
             "sql-file", "source-connection", "transform", "transform-file",
-            "http-adapter", "http-transform",
+            "http-adapter", "http-transform", "http-request",
             "table", "connection", "create", "replace", "recreate", "append",
             "out-file", "file-type", "dry-run",
             "file-manifest-id", "file-mutation-id", "file-type-id",
@@ -299,6 +299,7 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
             "transform-file": {"direct", "manifest", "query", "query_file", "query_to_file"},
             "http-adapter": {"direct", "manifest", "query", "query_file", "query_to_file"},
             "http-transform": {"direct", "manifest", "query", "query_file", "query_to_file"},
+            "http-request": {"direct", "manifest", "query", "query_file", "query_to_file"},
             # A statement has no format, so this stays file-only.
             "file-type": {"direct"},
             # THE GOVERNED FILE'S THREE, and they belong to `manifest` alone.
@@ -332,7 +333,7 @@ class TestTheLoadShapesReproduceTheInvocationMatrix:
             name.replace("_", "-") for name in _UNCONFIGURED_ONLY_OPTIONS
         } | {"statement", "sql-file", "source-connection", "out-file",
              "transform", "transform-file",
-             "http-adapter", "http-transform",
+             "http-adapter", "http-transform", "http-request",
              # `manifest` is an unconfigured shape like the rest: a governed
              # file is named by identity, not by a data_sources definition, so
              # its three belong here with them.

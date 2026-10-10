@@ -45,7 +45,19 @@ class TestEachArgumentGoesToItsObject:
         ))
 
         assert transform.selected_kind() == "http"
-        assert transform.executed_declaration() == {"adapter": "lookup", "declaration": None}
+        assert transform.executed_declaration() == {
+            "adapter": "lookup", "declaration": None, "request": None,
+        }
+
+    def test_http_request_carries_the_values_set_for_the_request(self) -> None:
+        # Backlog 841: --http-request lands under the Transform's field, and the
+        # executed declaration carries it for the operation it sends through.
+        _source, transform, _target = rey_loader_main._load_objects_from(_args(
+            file="/in.csv", table="s.t", connection="c", http_adapter="lookup",
+            http_request='{"body": {"idValue": "identifier_value"}}',
+        ))
+
+        assert transform.executed_declaration()["request"] == {"body": {"idValue": "identifier_value"}}
 
     def test_http_transform_is_the_mapping_applied_before_sending(self) -> None:
         # Backlog 679: --http-transform lands under the Transform's field and

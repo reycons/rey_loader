@@ -266,6 +266,7 @@ _SOURCE_ARGUMENTS: dict[str, str] = {
 _TRANSFORM_ARGUMENTS: dict[str, str] = {
     "transform": "transform", "transform_file": "transform-file",
     "http_adapter": "http-adapter", "http_transform": "http-transform",
+    "http_request": "http-request",
 }
 _TARGET_ARGUMENTS: dict[str, str] = {
     "table": "table", "connection": "connection", "out_file": "out-file",
@@ -541,6 +542,13 @@ def _parse_args() -> argparse.Namespace:
         default="",
         help="With load --http-adapter: the column mapping applied to the "
              "records before they are sent, as --transform's declaration is.",
+    )
+    parser.add_argument(
+        "--http-request",
+        dest="http_request",
+        default="",
+        help="With load --http-adapter: the values set for the operation's request "
+             "settings, as {part: {name: value}} (backlog 841).",
     )
     parser.add_argument(
         "--out-file",

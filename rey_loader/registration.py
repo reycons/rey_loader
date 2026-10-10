@@ -424,6 +424,18 @@ _COMMANDS: list[dict[str, Any]] = [
                                "they are sent. Omit it to send them as they are.",
             },
             {
+                "name": "http-request",
+                "load_object": _TRANSFORM,
+                "required": False,
+                "mode_membership": {
+                    _LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE, _QUERY_TO_FILE],
+                },
+                "value_type": "string",
+                "description": "The values set for the HTTP operation's request "
+                               "settings, as {part: {name: value}}. Omit it to send "
+                               "the operation's own.",
+            },
+            {
                 "name": "table",
                 "load_object": _DESTINATION,
                 "required": False,
