@@ -50,6 +50,7 @@ from rey_lib.logs import AppLogger
 from rey_lib.workflow import (
     RunContext,
     StepResult,
+    hydrate_workflow,
     run_workflow as coordinate_workflow,
 )
 
@@ -529,7 +530,9 @@ def run_process_workflow(ctx: Any, run_log: Any, adapter: Any, workflow_name: st
         "contracts": [CONTRACT],
     }
     registry = _guarded_registry(build_process_registry(adapter))
-    run = coordinate_workflow(ctx, run_log, wf, registry, apply=apply,
+    workflow = hydrate_workflow(wf, installation=ctx.installation.name)
+    run = coordinate_workflow(ctx, run_log, workflow, registry,
+                              application=APP_NAME, apply=apply,
                               step=step, from_step=from_step, to_step=to_step,
                               metadata=metadata)
     if run.status != "success":

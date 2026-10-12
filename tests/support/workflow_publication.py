@@ -21,10 +21,14 @@ from rey_lib.config.applications import (
     ApplicationCommand,
     ApplicationCommandParameter,
 )
+from rey_lib.workflow import WorkflowRun, hydrate_workflow, run_workflow
 
-__all__ = ["prepared"]
+__all__ = ["prepared", "run_hydrated"]
 
 _ENGINE_KEYS = frozenset({"implementation", "apply_only", "enabled", "name"})
+
+#: The installation a fixture context names.
+_FIXTURE_INSTALLATION = SimpleNamespace(name="fixture_installation")
 
 
 def prepared(workflow: dict[str, Any], ctx: Any = None) -> tuple[dict[str, Any], Any]:
@@ -52,12 +56,34 @@ def prepared(workflow: dict[str, Any], ctx: Any = None) -> tuple[dict[str, Any],
 
     application = Application(name=owner, workflow_operations=tuple(operations))
     if ctx is None:
-        return prepared_workflow, SimpleNamespace(applications=(application,))
+        return prepared_workflow, SimpleNamespace(
+            applications=(application,), installation=_FIXTURE_INSTALLATION,
+        )
     try:
         setattr(ctx, "applications", (application,))
     except AttributeError:
         object.__setattr__(ctx, "applications", (application,))
+    # Every context the configuration load builds names its installation, and
+    # the workflow is hydrated into it.
+    if getattr(ctx, "installation", None) is None:
+        try:
+            setattr(ctx, "installation", _FIXTURE_INSTALLATION)
+        except AttributeError:
+            object.__setattr__(ctx, "installation", _FIXTURE_INSTALLATION)
     return prepared_workflow, ctx
+
+
+def run_hydrated(
+    ctx: Any,
+    run_log: Any,
+    workflow: Mapping[str, Any],
+    registry: Mapping[str, Any],
+    **kwargs: Any,
+) -> WorkflowRun:
+    """Hydrate a fixture definition and run it as its own application."""
+    hydrated = hydrate_workflow(workflow, installation=_FIXTURE_INSTALLATION.name)
+    return run_workflow(ctx, run_log, hydrated, registry,
+                        application=str(workflow.get("app") or ""), **kwargs)
 
 
 def _configured(

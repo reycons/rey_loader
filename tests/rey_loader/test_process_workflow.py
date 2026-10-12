@@ -123,7 +123,7 @@ def test_run_process_workflow_is_a_single_ordered_pass(run_log):
                                                           operation="discover_file")),
         _NS(id="s3", process="validate", config=_NS(marker="s3")),
     )
-    ctx = _NS(workflows=[wf], applications=_publishing(
+    ctx = _NS(workflows=[wf], installation=_NS(name="test"), applications=_publishing(
         "file_operation", "sql_operation", "validate", "etl_operation"))
     with patch("rey_loader.workflow.build_process_registry", return_value=stub):
         code = run_process_workflow(ctx, run_log, object(), "w", apply=True)
@@ -143,7 +143,7 @@ def test_run_process_workflow_runs_only_the_selected_step(run_log):
         _NS(id="s1", process="sql_operation", config=_NS(marker="s1")),
         _NS(id="s2", process="validate", config=_NS(marker="s2")),
     )
-    ctx = _NS(workflows=[wf], applications=_publishing("sql_operation", "validate"))
+    ctx = _NS(workflows=[wf], installation=_NS(name="test"), applications=_publishing("sql_operation", "validate"))
     with patch("rey_loader.workflow.build_process_registry", return_value=stub):
         code = run_process_workflow(ctx, run_log, object(), "w", apply=True, step="s1")
     assert code == 0
@@ -198,7 +198,8 @@ def test_no_file_skips_file_scoped_steps(run_log):
         _NS(id="batch_step", process="sql_operation", config=_NS(id="batch_step")),
         _NS(id="file_step", process="validate", config=_NS(id="file_step", scope="file")),
     )
-    ctx = _NS(workflows=[wf], no_file=False, applications=_publishing(
+    ctx = _NS(workflows=[wf], no_file=False, installation=_NS(name="test"),
+              applications=_publishing(
         "file_operation", "sql_operation", "validate", "etl_operation"))
     with patch("rey_loader.workflow.build_process_registry", return_value=stub):
         run_process_workflow(ctx, run_log, object(), "w", apply=True)
