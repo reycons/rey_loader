@@ -68,7 +68,7 @@ def test_step_selection_reaches_the_workflow_engine(run_log) -> None:
     run = Mock(status="success", outcomes=[])
 
     with patch.object(loader_main, "needs_file_loop", return_value=False), \
-         patch.object(loader_workflow, "_get_workflow", return_value={"name": "w", "steps": []}), \
+         patch.object(loader_workflow, "_get_workflow", return_value=Mock(steps=[])), \
          patch.object(loader_workflow, "coordinate_workflow", return_value=run) as engine:
         assert loader_main._run_workflow_command(ctx, run_log, args, True) == 0
 

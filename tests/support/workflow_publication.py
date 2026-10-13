@@ -17,17 +17,13 @@ from types import SimpleNamespace
 from typing import Any, Mapping
 
 from rey_lib.config.applications import Application, ApplicationOperation
-from rey_lib.workflow import WorkflowRun, hydrate_workflow, run_workflow
 
-__all__ = ["prepared", "run_hydrated"]
+__all__ = ["prepared"]
 
 _ENGINE_KEYS = frozenset({"implementation", "apply_only", "always_run", "enabled", "name"})
 
 #: The application a fixture belongs to when it names none.
 _DEFAULT_OWNER = "rey_loader"
-
-#: The installation a fixture context names.
-_FIXTURE_INSTALLATION = SimpleNamespace(name="fixture_installation")
 
 
 def prepared(workflow: dict[str, Any], ctx: Any = None) -> tuple[dict[str, Any], Any]:
@@ -96,15 +92,3 @@ def _configured(
             names.update(key for key in (step.get("config") or {}) if key not in _ENGINE_KEYS)
     return names
 
-
-def run_hydrated(
-    ctx: Any,
-    run_log: Any,
-    workflow: Mapping[str, Any],
-    registry: Mapping[str, Any],
-    **kwargs: Any,
-) -> WorkflowRun:
-    """Hydrate a fixture definition and run it as its own application."""
-    hydrated = hydrate_workflow(workflow, installation=_FIXTURE_INSTALLATION.name)
-    return run_workflow(ctx, run_log, hydrated, registry,
-                        application=str(workflow.get("app") or ""), **kwargs)

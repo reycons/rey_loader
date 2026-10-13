@@ -34,7 +34,6 @@ def _ctx(tmp_path: Path, *, stop_on_error: bool) -> SimpleNamespace:
     return SimpleNamespace(
         log_file=str(tmp_path / "rey_loader.log"),
         app_name="rey_loader",
-        installation=SimpleNamespace(name="test"),
         sql_steps=[SimpleNamespace(
             name="apply_sql", connection="warehouse", sql_path=str(sql_dir),
             file_pattern="*.sql", execution_order="filename",
@@ -91,11 +90,9 @@ def test_a_failed_workflow_is_status_and_returns_nonzero(
             patch.object(workflow, "_guarded_registry", return_value={}), \
             patch.object(workflow, "build_process_registry", return_value={}), \
             patch.object(workflow, "coordinate_workflow", return_value=failed_run), \
-            patch.object(workflow, "hydrate_workflow"), \
             caplog.at_level(logging.WARNING):
         assert workflow.run_process_workflow(
-            SimpleNamespace(installation=SimpleNamespace(name="test")), object(), object(),
-            "wf", apply=False,
+            SimpleNamespace(), object(), object(), "wf", apply=False,
         ) == 1
 
     assert _errors(caplog) == []

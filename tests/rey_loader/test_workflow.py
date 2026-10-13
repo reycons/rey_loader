@@ -18,8 +18,9 @@ import pytest
 
 from rey_lib.config.applications import Application
 
-from tests.support.workflow_publication import prepared, run_hydrated
+from tests.support.workflow_publication import prepared
 
+from rey_lib.workflow import run_workflow as coordinate_workflow
 
 from rey_loader.error_utils import ReyLoaderError
 from rey_loader.workflow import build_process_registry, run_process_workflow
@@ -72,8 +73,6 @@ def _attach_workflows(ctx: Namespace) -> Namespace:
     object.__setattr__(ctx, "applications", (
         Application(name="rey_loader", workflow_operations=tuple(operations.values())),
     ))
-    # The installation the workflows are hydrated into, as the config load names it.
-    object.__setattr__(ctx, "installation", Namespace(name="test"))
     return ctx
 
 
@@ -96,7 +95,7 @@ def test_steps_run_in_order_and_record_metadata(run_log, ctx: Namespace) -> None
 
     with patch("rey_loader.workflow.run_load", return_value=7) as mock_load:
         _wf, _ctx = prepared(_transform_load(), ctx)
-        run = run_hydrated(_ctx, run_log, _wf, registry, apply=True)
+        run = coordinate_workflow(_ctx, run_log, _wf, registry, apply=True)
 
     assert run.status == "success"
     assert [o.id for o in run.outcomes] == ["transform_files", "load_files", "validate_load"]
@@ -117,7 +116,7 @@ def test_fail_closed_stops_at_failing_step(run_log, ctx: Namespace) -> None:
 
     with patch("rey_loader.workflow.run_load", side_effect=RuntimeError("db down")):
         _wf, _ctx = prepared(_transform_load(), ctx)
-        run = run_hydrated(_ctx, run_log, _wf, registry, apply=True)
+        run = coordinate_workflow(_ctx, run_log, _wf, registry, apply=True)
 
     assert run.status == "failed"
     assert [o.status for o in run.outcomes] == ["ok", "failed", "skipped"]
@@ -132,7 +131,7 @@ def test_dry_run_skips_load_but_transforms(run_log, ctx: Namespace) -> None:
 
     with patch("rey_loader.workflow.run_load") as mock_load:
         _wf, _ctx = prepared(_transform_load(), ctx)
-        run = run_hydrated(_ctx, run_log, _wf, registry, apply=False)
+        run = coordinate_workflow(_ctx, run_log, _wf, registry, apply=False)
 
     assert run.status == "success"
     mock_load.assert_not_called()
@@ -187,7 +186,7 @@ def test_workflow_transform_output_matches_expected(run_log, ctx: Namespace) -> 
     }
 
     _wf, _ctx = prepared(workflow, ctx)
-    run = run_hydrated(_ctx, run_log, _wf, registry, apply=True)
+    run = coordinate_workflow(_ctx, run_log, _wf, registry, apply=True)
 
     assert run.status == "success"
     matches = sorted(converted.glob("tran_20260501_v01.csv"))
