@@ -57,17 +57,9 @@ def test_the_legacy_configuration_refusals_are_kept(
         _run(run_log, config)
 
 
-def test_the_operation_is_published_with_the_legacy_contract() -> None:
-    published = {op["name"]: op for op in WORKFLOW_OPERATIONS}["excel_conversion"]
+def test_the_operation_is_published_with_its_contract() -> None:
+    """name and enabled are read by the reader but stripped by the engine (#928): not published."""
+    contract = {op["name"]: op for op in WORKFLOW_OPERATIONS}["excel_conversion"]["contract_definition"]
 
-    assert [(p["name"], p["required"], p["value_type"]) for p in published["parameters"]] == [
-        ("file_selection", True, "mapping"),
-        ("outbox", True, "mapping"),
-        ("processing", False, "mapping"),
-        ("archive", False, "mapping"),
-        ("name", False, "string"),
-        ("enabled", False, "flag"),
-        ("include_hidden_sheets", False, "flag"),
-        ("include_empty_sheets", False, "flag"),
-        ("scope", False, "string"),
-    ]
+    assert list(contract["properties"]) == ['file_selection', 'outbox', 'processing', 'archive', 'include_hidden_sheets', 'include_empty_sheets', 'scope']
+    assert contract["required"] == ['file_selection', 'outbox']

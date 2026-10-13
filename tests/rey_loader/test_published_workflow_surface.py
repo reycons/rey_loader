@@ -1,10 +1,10 @@
 """What this application publishes, and what its catalog will run.
 
-Four of the eight are dispatchers: they read an ``operation`` and accept a
-different subset of the rest depending on which was named. The published
-contract is the union that dispatcher intentionally accepts, with requiredness
-declared only where it holds whatever the operation is. What a selected
-operation additionally requires is validated inside this application.
+Every operation publishes a JSON Schema contract of the settings its reader
+takes (backlog 939). Four are dispatchers: they read an ``operation`` and take
+different settings depending on which was named. file_operation's variants
+differ in what they read, so its contract holds one variant per operation value;
+the other three read the same settings whatever the value.
 """
 
 from __future__ import annotations
@@ -17,6 +17,10 @@ def published() -> dict[str, dict]:
     return {one["name"]: one for one in get_registration()["workflow_operations"]}
 
 
+def contract(name: str) -> dict:
+    return published()[name]["contract_definition"]
+
+
 class TestPublicationAndCatalogAgree:
 
     def test_every_published_operation_is_in_the_catalog(self) -> None:
@@ -27,54 +31,60 @@ class TestPublicationAndCatalogAgree:
 
 
 class TestTheDispatchers:
-    """Requiredness holds whatever the operation is; the rest is app-owned."""
+    """What each dispatcher reads, as its reader reads it."""
 
-    def test_a_dispatcher_requires_only_its_operation(self) -> None:
-        for name in ("file_operation", "sql_operation", "validate", "etl_operation"):
-            required = {
-                one["name"] for one in published()[name]["parameters"]
-                if one["required"]
-            }
-            assert required == {"operation"}, name
+    def test_file_operation_holds_one_variant_per_operation(self) -> None:
+        definition = contract("file_operation")
+        chosen = [variant["properties"]["operation"]["const"] for variant in definition["oneOf"]]
 
-    def test_an_operation_publishes_the_values_it_accepts(self) -> None:
-        """An author reads which operations exist from the contract."""
-        operation = next(
-            one for one in published()["file_operation"]["parameters"]
-            if one["name"] == "operation"
-        )
+        assert chosen == ["discover", "discover_file", "move", "delete"]
+        assert definition["properties"]["operation"]["enum"] == chosen
 
-        assert set(operation["possible_values"]) == {
-            "discover", "discover_file", "move", "delete",
+    def test_each_file_operation_variant_requires_what_it_reads(self) -> None:
+        required = {
+            variant["properties"]["operation"]["const"]: set(variant["required"])
+            for variant in contract("file_operation")["oneOf"]
         }
 
-    def test_operation_specific_requirements_are_not_published(self) -> None:
-        """sql_operation refuses without a procedure_map, and says so itself.
+        assert required == {
+            "discover": {"operation", "data_source", "path"},
+            "discover_file": {"operation", "data_source", "path"},
+            "move": {"operation", "data_source", "to"},
+            "delete": {"operation"},
+        }
 
-        Declaring that outside would make the generic engine hold rey_loader's
-        semantics, and would refuse the operations that legitimately omit it.
-        """
-        procedure_map = next(
-            one for one in published()["sql_operation"]["parameters"]
-            if one["name"] == "procedure_map"
-        )
+    def test_sql_operation_requires_what_its_reader_refuses_without(self) -> None:
+        """_process_sql_operation refuses every operation lacking any of these."""
+        assert set(contract("sql_operation")["required"]) == {
+            "operation", "procedure_map", "routine_binding", "connection",
+        }
 
-        assert procedure_map["required"] is False
+    def test_validate_publishes_the_one_value_its_reader_accepts(self) -> None:
+        """_process_validate refuses anything but validate_file (#937)."""
+        assert contract("validate")["properties"]["operation"]["enum"] == ["validate_file"]
+
+    def test_etl_operation_publishes_its_two_operations(self) -> None:
+        assert contract("etl_operation")["properties"]["operation"]["enum"] == [
+            "transform_file", "load_file",
+        ]
 
 
 class TestTheGuardsSetting:
     """scope is declared data to the engine and semantics to this app."""
 
+    @staticmethod
+    def _scopes(definition: dict) -> list[dict]:
+        holders = definition.get("oneOf") or [definition]
+        return [holder for holder in holders if "scope" in holder.get("properties", {})], holders
+
     def test_every_operation_accepts_scope(self) -> None:
         """The guard wraps every handler, so any step may carry it."""
-        for name, operation in published().items():
-            names = {one["name"] for one in operation["parameters"]}
-            assert "scope" in names, name
+        for name in published():
+            with_scope, holders = self._scopes(contract(name))
+            assert len(with_scope) == len(holders), name
 
     def test_scope_is_never_required(self) -> None:
         """A step that is not file-scoped simply does not say so."""
-        for name, operation in published().items():
-            scope = next(
-                one for one in operation["parameters"] if one["name"] == "scope"
-            )
-            assert scope["required"] is False, name
+        for name in published():
+            _with_scope, holders = self._scopes(contract(name))
+            assert all("scope" not in holder.get("required", []) for holder in holders), name

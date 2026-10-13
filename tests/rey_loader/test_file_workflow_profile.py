@@ -75,10 +75,9 @@ def test_profiling_resolves_only_to_the_profiling_handler() -> None:
     assert "profile" in registry["profile_csv_record_types"].__name__
 
 
-def test_the_operation_is_published_with_the_legacy_contract() -> None:
-    published = {op["name"]: op for op in WORKFLOW_OPERATIONS}["profile_csv_record_types"]
+def test_the_operation_is_published_with_its_contract() -> None:
+    """Profiling reads only file_selection.operation; source_field is not published."""
+    contract = {op["name"]: op for op in WORKFLOW_OPERATIONS}["profile_csv_record_types"]["contract_definition"]
 
-    assert [(p["name"], p["required"], p["value_type"]) for p in published["parameters"]] == [
-        ("file_selection", True, "mapping"),
-        ("scope", False, "string"),
-    ]
+    assert list(contract["properties"]) == ['file_selection', 'scope']
+    assert contract["required"] == ['file_selection']

@@ -45,9 +45,8 @@ def test_no_candidates_is_ok(run_log) -> None:
     assert _run(run_log, 0, 0).status == "ok"
 
 
-def test_the_operation_is_published_with_the_legacy_contract() -> None:
-    published = {op["name"]: op for op in WORKFLOW_OPERATIONS}["classify_source_files"]
+def test_the_operation_is_published_with_its_contract() -> None:
+    contract = {op["name"]: op for op in WORKFLOW_OPERATIONS}["classify_source_files"]["contract_definition"]
 
-    assert [(p["name"], p["required"]) for p in published["parameters"]] == [
-        ("sources", True), ("scope", False),
-    ]
+    assert list(contract["properties"]) == ['sources', 'scope']
+    assert contract["required"] == ['sources']

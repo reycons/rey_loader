@@ -73,12 +73,7 @@ def test_a_dry_run_says_would_prepare(run_log) -> None:
 
 def test_the_operation_is_published_with_its_contract() -> None:
     """One implementation for both prepared files: ``output`` says which (614)."""
-    published = {op["name"]: op for op in WORKFLOW_OPERATIONS}["create_prepared_files"]
+    contract = {op["name"]: op for op in WORKFLOW_OPERATIONS}["create_prepared_files"]["contract_definition"]
 
-    assert [(p["name"], p["required"], p["value_type"]) for p in published["parameters"]] == [
-        ("file_selection", True, "mapping"),
-        ("outbox", True, "mapping"),
-        ("preparation", True, "mapping"),
-        ("output", False, "choice"),
-        ("scope", False, "string"),
-    ]
+    assert list(contract["properties"]) == ['file_selection', 'outbox', 'output', 'preparation', 'scope']
+    assert contract["required"] == ['file_selection', 'outbox', 'preparation']

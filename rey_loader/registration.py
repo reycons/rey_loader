@@ -606,152 +606,571 @@ CLI: dict[str, Any] = {   'shared_parameters': [   {   'name': 'config-path',
     'commands': _COMMANDS}
 
 
+#: The operations a workflow may name, each with its settings contract (backlog
+#: 939): a JSON Schema 2020-12 definition of the settings its reader takes, and
+#: the starter settings a new instance copies. Built from the readers, not from
+#: the earlier parameter lists:
+#:
+#:   file_operation, sql_operation, validate, etl_operation  rey_loader/workflow.py
+#:   inventory_source_files    rey_lib/load/inventory.py resolve_inventory_source_configs
+#:   classify_source_files     rey_lib/load/classify.py _classification_source_config, _variables
+#:   excel_conversion          rey_lib/load/convert.py _resolve_inline_excel_conversion_config
+#:   sanitize_file             rey_lib/load/sanitize.py _resolve_config, rey_lib/files/sanitization.py
+#:   profile_csv_record_types  rey_lib/load/profile.py run_record_type_profiling
+#:   create_prepared_files     rey_lib/load/prepare.py _resolve_config
+#:
+#: Canonical names only: the readers still accept file_pattern, values,
+#: routine_name and a bare-string folder for compatibility, and those are not
+#: published. excel_conversion's name and enabled are read but never reach the
+#: reader -- the workflow engine strips them (#928) -- so they are not published.
+
+_SCHEMA = "https://json-schema.org/draft/2020-12/schema"
+
 #: Read by this application's own guard, which skips a file-scoped step when a
-#: run found no file. Declared data to the engine, which never learns what a
-#: scope is: the catalog handed over is already wrapped.
-_SCOPE = {
-    "name": "scope", "required": False, "value_type": "string",
-    "description": "Skip this step when the run found no file, where 'file'.",
+#: run found no file. Every loader operation accepts it.
+_SCOPE: dict[str, Any] = {
+    "type": "string",
+    "description": "'file' skips this step when the run found no file.",
+}
+
+_DATA_SOURCE: dict[str, Any] = {
+    "type": "string",
+    "description": "Data source whose declared paths and configs this step reads.",
+    "x-rey-reference": {"collection": "data_sources"},
 }
 
 
-def _operation(name: str, description: str, *parameters: dict[str, Any]) -> dict[str, Any]:
-    """One published operation, with the guard's parameter on every one."""
+def _file_selection(*, with_source_field: bool = True) -> dict[str, Any]:
+    """The manifest selection a governed file step reads its files through."""
+    properties: dict[str, Any] = {
+        "operation": {
+            "type": "string",
+            "description": "Manifest retrieval operation naming the files this step still has to handle.",
+        },
+    }
+    required = ["operation"]
+    if with_source_field:
+        properties["source_field"] = {
+            "type": "string",
+            "description": "Field of each selected row that holds the file's path.",
+        }
+        required.append("source_field")
     return {
-        "name": name,
-        "description": description,
-        "parameters": [*parameters, _SCOPE],
+        "type": "object",
+        "description": "Which governed files this step handles.",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
     }
 
 
-def _setting(name: str, description: str, value_type: str = "string") -> dict[str, Any]:
-    """One optional setting a dispatcher accepts for some of its operations."""
+def _folder(description: str, **extra: dict[str, Any]) -> dict[str, Any]:
+    """A destination folder with its own collision policy."""
     return {
-        "name": name, "required": False, "value_type": value_type,
+        "type": "object",
         "description": description,
+        "properties": {
+            "path": {"type": "string", "description": "Folder path; placeholders resolve per file."},
+            "overwrite": {
+                "type": "boolean", "default": False,
+                "description": "Replace an existing file of the same name.",
+            },
+            **extra,
+        },
+        "required": ["path"],
+        "additionalProperties": False,
     }
 
 
-#: The operations a workflow may name.
+def _contract(description: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    """A closed settings object, with the guard's scope."""
+    return {
+        "$schema": _SCHEMA,
+        "type": "object",
+        "description": description,
+        "properties": {**properties, "scope": _SCOPE},
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
+def _variant(operation: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    """One variant of a dispatcher, chosen by its operation value."""
+    return {
+        "properties": {"operation": {"const": operation}, **properties, "scope": _SCOPE},
+        "required": ["operation", *required],
+        "additionalProperties": False,
+    }
+
+
+def _dispatcher(description: str, choices: dict[str, str], variants: list[dict[str, Any]]) -> dict[str, Any]:
+    """A settings object whose operation value selects one variant."""
+    return {
+        "$schema": _SCHEMA,
+        "type": "object",
+        "description": description,
+        "properties": {
+            "operation": {
+                "type": "string",
+                "enum": list(choices),
+                "description": "Which operation this step performs: "
+                + "; ".join(f"{name} -- {meaning}" for name, meaning in choices.items()),
+            },
+        },
+        "required": ["operation"],
+        "oneOf": variants,
+    }
+
+
+_PATH_KEY = "Named path key on the data source."
+_CHARACTER_RULE: dict[str, Any] = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "reason": {"type": "string"}},
+    "required": ["name", "reason"],
+    "additionalProperties": False,
+}
+_CHARACTER_TABLE: dict[str, Any] = {
+    "type": "object",
+    "description": "Rules keyed by code point (U+XXXX).",
+    "propertyNames": {"pattern": "^U\\+[0-9A-F]{4,6}$"},
+    "additionalProperties": {"$ref": "#/$defs/character_rule"},
+}
+_SANITIZATION_DEFS: dict[str, Any] = {
+    "character_rule": _CHARACTER_RULE,
+    "policy": {
+        "type": "object",
+        "description": "One sanitization policy layer; a feed's layer overlays the global one.",
+        "properties": {
+            "policy_name": {"type": "string"},
+            "policy_version": {"type": "string"},
+            "remove": _CHARACTER_TABLE,
+            "preserve": _CHARACTER_TABLE,
+            "preserve_if_quoted": _CHARACTER_TABLE,
+            "replace": {
+                "type": "object",
+                "description": "Replacement rules keyed by code point (U+XXXX).",
+                "propertyNames": {"pattern": "^U\\+[0-9A-F]{4,6}$"},
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "reason": {"type": "string"},
+                        "with": {"type": "string", "description": "Replacement text."},
+                    },
+                    "required": ["name", "reason", "with"],
+                    "additionalProperties": False,
+                },
+            },
+            "line_repair": {
+                "type": "object",
+                "description": "Line-repair rules keyed by rule name; a feed rule replaces a global rule of the same name.",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "Regular expression; must not match empty."},
+                        "replacement": {"type": "string"},
+                        "reason": {"type": "string"},
+                        "flags": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": ["ASCII", "IGNORECASE"]},
+                        },
+                    },
+                    "required": ["pattern", "replacement", "reason"],
+                    "additionalProperties": False,
+                },
+            },
+            "max_logical_line_characters": {
+                "type": "integer", "minimum": 1,
+                "description": "Required in the effective policy when any line_repair rule applies.",
+            },
+        },
+        "required": [
+            "policy_name", "policy_version", "remove", "preserve", "preserve_if_quoted",
+            "replace", "line_repair",
+        ],
+        "additionalProperties": False,
+    },
+}
+_EMPTY_POLICY: dict[str, Any] = {
+    "policy_name": "", "policy_version": "", "remove": {}, "preserve": {},
+    "preserve_if_quoted": {}, "replace": {}, "line_repair": {},
+}
+
 WORKFLOW_OPERATIONS: list[dict[str, Any]] = [
-    _operation(
-        "file_operation",
-        "Discover, move or delete files.",
-        {"name": "operation", "required": True, "value_type": "choice",
-         "possible_values": ["discover", "discover_file", "move", "delete"],
-         "description": "Which file operation this step performs."},
-        _setting("data_source", "Data source whose declared paths and configs this reads."),
-        _setting("path", "Named path key on that data source.", "path"),
-        _setting("pattern", "Filename pattern selecting files."),
-        _setting("output", "Where the operation records what it found."),
-        _setting("to", "Destination, for a move.", "path"),
-        _setting("max_files_per_run", "Cap on files handled in one run.", "integer"),
-    ),
-    _operation(
-        "sql_operation",
-        "Execute one configured routine through the shared procedure map.",
-        {"name": "operation", "required": True, "value_type": "choice",
-         "possible_values": ["execute_parameter_result", "execute_no_return",
-                             "execute_routine_binding"],
-         "description": "Which execution shape this step uses."},
-        _setting("procedure_map", "Procedure map the routine is resolved through."),
-        _setting("routine_binding", "Binding naming the routine and its arguments."),
-        _setting("routine_name", "Routine to call, where named directly."),
-        _setting("connection", "Configured connection the routine runs on."),
-        _setting("params", "Parameters passed to the routine."),
-        _setting("values", "Values bound to those parameters."),
-    ),
-    _operation(
-        "validate",
-        "Validate a file before it is loaded.",
-        {"name": "operation", "required": True, "value_type": "choice",
-         "possible_values": ["delimited_header"],
-         "description": "Which validation this step performs."},
-        _setting("data_source", "Data source whose declared paths and configs this reads."),
-    ),
-    _operation(
-        "etl_operation",
-        "Transform or load one file through the loader.",
-        {"name": "operation", "required": True, "value_type": "choice",
-         "possible_values": ["transform_file", "load_file"],
-         "description": "Which ETL operation this step performs."},
-        _setting("data_source", "Data source whose declared paths and configs this reads."),
-    ),
-    # The inventory_and_prepare_files replacement (row 589). The parameter
-    # contract is the legacy file_operator one, less file_insertion: the
-    # binding that records a file is FileManifest.inventory's own.
-    _operation(
-        "inventory_source_files",
-        "Inventory every configured source set into the governed manifest.",
-        {"name": "sources", "required": True, "value_type": "mapping",
-         "description": "The source sets this step enumerates."},
-    ),
-    _operation(
-        "classify_source_files",
-        "Classify inventoried files by their structural type.",
-        {"name": "sources", "required": True, "value_type": "mapping",
-         "description": "The classification sources, each with its own selection."},
-    ),
-    # Copied from the legacy file_operator contract exactly (row 589, step 3).
-    _operation(
-        "excel_conversion",
-        "Convert classified workbooks to CSV.",
-        {"name": "file_selection", "required": True, "value_type": "mapping",
-         "description": "Routine naming this step's files, and the row field holding each path."},
-        {"name": "outbox", "required": True, "value_type": "mapping",
-         "description": "Where converted files are written."},
-        {"name": "processing", "required": False, "value_type": "mapping",
-         "description": "Working folder for the conversion."},
-        {"name": "archive", "required": False, "value_type": "mapping",
-         "description": "Where consumed workbooks are kept."},
-        {"name": "name", "required": False, "value_type": "string",
-         "description": "Names this conversion in its evidence."},
-        {"name": "enabled", "required": False, "value_type": "flag",
-         "description": "Whether this conversion runs."},
-        {"name": "include_hidden_sheets", "required": False, "value_type": "flag",
-         "description": "Convert hidden sheets as well."},
-        {"name": "include_empty_sheets", "required": False, "value_type": "flag",
-         "description": "Convert sheets with no rows."},
-    ),
-    # Transform(prepare, output="clear" | "redacted") (backlog 614): one
-    # implementation; a process says which prepared file it writes.
-    _operation(
-        "create_prepared_files",
-        "Create the prepared file, clear or redacted, for each selected source.",
-        {"name": "file_selection", "required": True, "value_type": "mapping",
-         "description": "Routine naming this step's files, and the row field holding each path."},
-        {"name": "outbox", "required": True, "value_type": "mapping",
-         "description": "Where prepared files are written."},
-        {"name": "preparation", "required": True, "value_type": "mapping",
-         "description": "How a prepared file is built."},
-        {"name": "output", "required": False, "value_type": "choice",
-         "possible_values": ["clear", "redacted"],
-         "description": "Which prepared file this process writes; clear by default."},
-    ),
-    # Copied from the legacy file_operator contract exactly (row 589, step 5).
-    _operation(
-        "profile_csv_record_types",
-        "Profile every sanitized file a routine selects.",
-        {"name": "file_selection", "required": True, "value_type": "mapping",
-         "description": "Routine naming this step's files, and the row field holding each path."},
-    ),
-    # Copied from the legacy file_operator contract exactly (row 589, step 4).
-    _operation(
-        "sanitize_file",
-        "Sanitize the governed files a routine selects.",
-        {"name": "file_selection", "required": True, "value_type": "mapping",
-         "description": "Routine naming this step's files, and the row field holding each path."},
-        {"name": "outbox", "required": True, "value_type": "mapping",
-         "description": "Where sanitized files are written."},
-        {"name": "sanitization", "required": True, "value_type": "mapping",
-         "description": "What sanitizing this feed means."},
-        {"name": "feed", "required": True, "value_type": "string",
-         "description": "Feed whose sanitization policy applies."},
-    ),
-    _operation("transform_files", "Transform every configured input file."),
-    _operation("load_files", "Load every transformed file."),
-    _operation("validate_load", "Validate what the load produced."),
-    _operation("sql_apply", "Apply the configured SQL steps."),
+    {
+        "name": "file_operation",
+        "description": "Discover, move or delete files.",
+        "contract_definition": _dispatcher(
+            "Discover, move or delete files.",
+            {
+                "discover": "list the files a data-source path holds",
+                "discover_file": "bind the first file a data-source path holds as the current file",
+                "move": "move the current file to a data-source path",
+                "delete": "delete the current file",
+            },
+            [
+                _variant("discover", {
+                    "data_source": _DATA_SOURCE,
+                    "path": {"type": "string", "description": _PATH_KEY},
+                    "pattern": {"type": "string", "default": "*", "description": "Filename pattern."},
+                    "max_files_per_run": {"type": "integer", "minimum": 1, "description": "Cap on files listed."},
+                    "output": {
+                        "type": "object",
+                        "properties": {"files": {
+                            "type": "string", "default": "discovered_files",
+                            "description": "Run-context name the list is bound to.",
+                        }},
+                        "additionalProperties": False,
+                    },
+                }, ["data_source", "path"]),
+                _variant("discover_file", {
+                    "data_source": _DATA_SOURCE,
+                    "path": {"type": "string", "description": _PATH_KEY},
+                    "pattern": {"type": "string", "default": "*", "description": "Filename pattern."},
+                    "output": {
+                        "type": "object",
+                        "properties": {"current_file": {
+                            "type": "string", "default": "current_file",
+                            "description": "Run-context name the file is bound to.",
+                        }},
+                        "additionalProperties": False,
+                    },
+                }, ["data_source", "path"]),
+                _variant("move", {
+                    "data_source": _DATA_SOURCE,
+                    "to": {"type": "string", "description": _PATH_KEY},
+                }, ["data_source", "to"]),
+                _variant("delete", {}, []),
+            ],
+        ),
+        "contract_sample": {"operation": "discover_file", "data_source": "", "path": "", "pattern": "*"},
+    },
+    {
+        "name": "sql_operation",
+        "description": "Execute one configured routine through the shared procedure map.",
+        "contract_definition": _contract(
+            "Execute one configured routine through the shared procedure map.",
+            {
+                "operation": {
+                    "type": "string",
+                    "enum": ["execute_parameter_result", "execute_no_return", "execute_routine_binding"],
+                    "description": "Which execution shape this step uses.",
+                },
+                "procedure_map": {
+                    "type": "string",
+                    "description": "Procedure map the routine is resolved through.",
+                    "x-rey-reference": {"collection": "procedure_maps"},
+                },
+                "routine_binding": {
+                    "type": "string",
+                    "description": "Binding in that procedure map naming the routine and its arguments.",
+                },
+                "connection": {
+                    "type": "string",
+                    "description": "Configured connection the routine runs on.",
+                    "x-rey-reference": {"collection": "connections"},
+                },
+                "params": {
+                    "type": "object",
+                    "description": "Values passed to the routine, keyed by its parameter names.",
+                    "additionalProperties": {"type": ["string", "number", "boolean", "null"]},
+                },
+            },
+            ["operation", "procedure_map", "routine_binding", "connection"],
+        ),
+        "contract_sample": {
+            "operation": "execute_parameter_result", "procedure_map": "", "routine_binding": "",
+            "connection": "", "params": {},
+        },
+    },
+    {
+        "name": "validate",
+        "description": "Validate the current file against its data source's file type.",
+        "contract_definition": _contract(
+            "Validate the current file against its data source's file type.",
+            {
+                "operation": {"type": "string", "enum": ["validate_file"], "description": "The validation performed."},
+                "data_source": _DATA_SOURCE,
+            },
+            ["operation", "data_source"],
+        ),
+        "contract_sample": {"operation": "validate_file", "data_source": ""},
+    },
+    {
+        "name": "etl_operation",
+        "description": "Transform or load the current file through the loader.",
+        "contract_definition": _contract(
+            "Transform or load the current file through the loader.",
+            {
+                "operation": {
+                    "type": "string", "enum": ["transform_file", "load_file"],
+                    "description": "transform_file -- transform the current file; load_file -- load it.",
+                },
+                "data_source": _DATA_SOURCE,
+            },
+            ["operation", "data_source"],
+        ),
+        "contract_sample": {"operation": "transform_file", "data_source": ""},
+    },
+    {
+        "name": "inventory_source_files",
+        "description": "Inventory every configured source set into the governed manifest.",
+        "contract_definition": _contract(
+            "Inventory every configured source set into the governed manifest.",
+            {
+                "sources": {
+                    "type": "array",
+                    "description": "The source sets this step enumerates; a disabled one is skipped unvalidated.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "enabled": {"type": "boolean"},
+                            "source": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {
+                                        "type": "string",
+                                        "description": "Glob locating the files; no placeholders.",
+                                    },
+                                    "file_patterns": {
+                                        "type": "array", "minItems": 1,
+                                        "items": {"type": "string"},
+                                        "description": "File name patterns the files must match.",
+                                    },
+                                    "recursive": {"type": "boolean", "default": False},
+                                },
+                                "required": ["path", "file_patterns"],
+                                "additionalProperties": False,
+                            },
+                            "exclusions": {
+                                "type": "array", "items": {"type": "string"},
+                                "description": "File name patterns never inventoried.",
+                            },
+                        },
+                        "required": ["name", "enabled", "source"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            ["sources"],
+        ),
+        "contract_sample": {"sources": [{
+            "name": "", "enabled": True,
+            "source": {"path": "", "file_patterns": ["*.csv"], "recursive": False},
+            "exclusions": [],
+        }]},
+    },
+    {
+        "name": "classify_source_files",
+        "description": "Classify inventoried files by their structural type.",
+        "contract_definition": _contract(
+            "Classify inventoried files by their structural type.",
+            {
+                "sources": {
+                    "type": "array",
+                    "description": "The classification sources, each with its own selection.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "enabled": {"type": "boolean"},
+                            "classification_type": {"type": "string"},
+                            "retry_rejects": {"type": "boolean", "default": False},
+                            "processing": {
+                                "type": "string",
+                                "description": "Folder a classified file moves to; placeholders name variables.",
+                            },
+                            "file_selection": _file_selection(),
+                            "variables": {
+                                "type": "array", "minItems": 1,
+                                "description": "Values the path regex captures, each by a named group.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "source": {"type": "string", "enum": ["classification"]},
+                                        "required": {"type": "boolean", "default": True},
+                                        "values": {
+                                            "type": "array", "items": {"type": "string"},
+                                            "description": "The values the capture may take.",
+                                        },
+                                        "format": {"type": "string", "description": "Format the value must parse in."},
+                                    },
+                                    "required": ["name", "source"],
+                                    "additionalProperties": False,
+                                },
+                            },
+                            "classification": {
+                                "type": "object",
+                                "properties": {
+                                    "path_regex": {
+                                        "type": "string",
+                                        "description": "Regular expression over the path, a named group per variable.",
+                                    },
+                                    "profile": {
+                                        "type": "object",
+                                        "properties": {"key_fields": {
+                                            "type": "array", "minItems": 1, "items": {"type": "string"},
+                                            "description": "Declared variables whose values form the data_profile_key.",
+                                        }},
+                                        "required": ["key_fields"],
+                                        "additionalProperties": False,
+                                    },
+                                },
+                                "required": ["path_regex"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "required": ["name", "enabled", "classification_type", "file_selection", "variables", "classification"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            ["sources"],
+        ),
+        "contract_sample": {"sources": [{
+            "name": "", "enabled": True, "classification_type": "", "retry_rejects": False,
+            "file_selection": {"operation": "", "source_field": ""},
+            "variables": [{"name": "", "source": "classification", "required": True}],
+            "classification": {"path_regex": ""},
+        }]},
+    },
+    {
+        "name": "excel_conversion",
+        "description": "Convert classified workbooks to CSV.",
+        "contract_definition": _contract(
+            "Convert classified workbooks to CSV.",
+            {
+                "file_selection": _file_selection(),
+                "outbox": _folder("Where converted files are written."),
+                "processing": _folder("Working folder for the conversion."),
+                "archive": _folder("Where consumed workbooks are kept."),
+                "include_hidden_sheets": {"type": "boolean", "default": False},
+                "include_empty_sheets": {"type": "boolean", "default": False},
+            },
+            ["file_selection", "outbox"],
+        ),
+        "contract_sample": {
+            "file_selection": {"operation": "", "source_field": ""},
+            "outbox": {"path": "", "overwrite": False},
+            "include_hidden_sheets": False, "include_empty_sheets": False,
+        },
+    },
+    {
+        "name": "create_prepared_files",
+        "description": "Create the prepared file, clear or redacted, for each selected source.",
+        "contract_definition": _contract(
+            "Create the prepared file, clear or redacted, for each selected source.",
+            {
+                "file_selection": _file_selection(),
+                "outbox": _folder("Where prepared files are written."),
+                "output": {
+                    "type": "string", "enum": ["clear", "redacted"], "default": "clear",
+                    "description": "Which prepared file this process writes.",
+                },
+                "preparation": {
+                    "type": "object",
+                    "properties": {"headers": {
+                        "type": "object",
+                        "properties": {"convert_to": {"type": "string", "enum": ["snake_case"]}},
+                        "required": ["convert_to"],
+                        "additionalProperties": False,
+                    }},
+                    "required": ["headers"],
+                    "additionalProperties": False,
+                },
+            },
+            ["file_selection", "outbox", "preparation"],
+        ),
+        "contract_sample": {
+            "file_selection": {"operation": "", "source_field": ""},
+            "outbox": {"path": "", "overwrite": False},
+            "output": "clear",
+            "preparation": {"headers": {"convert_to": "snake_case"}},
+        },
+    },
+    {
+        "name": "profile_csv_record_types",
+        "description": "Profile every sanitized file a routine selects.",
+        "contract_definition": _contract(
+            "Profile every sanitized file a routine selects.",
+            {"file_selection": _file_selection(with_source_field=False)},
+            ["file_selection"],
+        ),
+        "contract_sample": {"file_selection": {"operation": ""}},
+    },
+    {
+        "name": "sanitize_file",
+        "description": "Sanitize the governed files a routine selects.",
+        "contract_definition": {
+            **_contract(
+                "Sanitize the governed files a routine selects.",
+                {
+                    "file_selection": _file_selection(),
+                    "outbox": _folder(
+                        "Where sanitized files are written.",
+                        redacted_copy={
+                            "type": "boolean", "default": False,
+                            "description": "Also publish a redacted sister of each sanitized file.",
+                        },
+                    ),
+                    "feed": {
+                        "type": "string",
+                        "description": "The feed whose policy in sanitization.feeds applies to this step.",
+                    },
+                    "sanitization": {
+                        "type": "object",
+                        "properties": {
+                            "global": {"$ref": "#/$defs/policy"},
+                            "feeds": {
+                                "type": "object",
+                                "description": "Feed policies keyed by feed name; each overlays the global policy.",
+                                "additionalProperties": {"$ref": "#/$defs/policy"},
+                            },
+                        },
+                        "required": ["global", "feeds"],
+                        "additionalProperties": False,
+                    },
+                },
+                ["file_selection", "outbox", "feed", "sanitization"],
+            ),
+            "$defs": _SANITIZATION_DEFS,
+        },
+        "contract_sample": {
+            "file_selection": {"operation": "", "source_field": ""},
+            "outbox": {"path": "", "overwrite": False},
+            "feed": "all",
+            "sanitization": {"global": dict(_EMPTY_POLICY), "feeds": {"all": dict(_EMPTY_POLICY)}},
+        },
+    },
+    {
+        "name": "transform_files",
+        "description": "Transform every configured input file.",
+        "contract_definition": _contract("Transform every configured input file.", {}, []),
+        "contract_sample": {},
+    },
+    {
+        "name": "load_files",
+        "description": "Load every transformed file.",
+        "contract_definition": _contract("Load every transformed file.", {}, []),
+        "contract_sample": {},
+    },
+    {
+        "name": "validate_load",
+        "description": "Validate what the load produced.",
+        "contract_definition": _contract("Validate what the load produced.", {}, []),
+        "contract_sample": {},
+    },
+    {
+        "name": "sql_apply",
+        "description": "Apply the configured SQL steps named by the run's --source.",
+        "contract_definition": _contract(
+            "Apply the configured SQL steps named by the run's --source; the step itself takes no settings.",
+            {}, [],
+        ),
+        "contract_sample": {},
+    },
 ]
 
 

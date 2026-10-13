@@ -37,12 +37,11 @@ def test_a_failed_inventory_fails_the_step(run_log) -> None:
         "failed", "Source inventory returned exit code 1.")
 
 
-def test_the_operation_is_published_with_the_legacy_contract_less_file_insertion() -> None:
-    published = {op["name"]: op for op in WORKFLOW_OPERATIONS}["inventory_source_files"]
+def test_the_operation_is_published_with_its_contract() -> None:
+    contract = {op["name"]: op for op in WORKFLOW_OPERATIONS}["inventory_source_files"]["contract_definition"]
 
-    assert [(p["name"], p["required"]) for p in published["parameters"]] == [
-        ("sources", True), ("scope", False),
-    ]
+    assert list(contract["properties"]) == ['sources', 'scope']
+    assert contract["required"] == ['sources']
 
 
 def test_the_handler_imports_nothing_from_file_operator() -> None:

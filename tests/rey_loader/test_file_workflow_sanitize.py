@@ -38,13 +38,8 @@ def test_a_dry_run_reports_what_it_would_sanitize(run_log) -> None:
     assert step.call_args.kwargs["apply"] is False
 
 
-def test_the_operation_is_published_with_the_legacy_contract() -> None:
-    published = {op["name"]: op for op in WORKFLOW_OPERATIONS}["sanitize_file"]
+def test_the_operation_is_published_with_its_contract() -> None:
+    contract = {op["name"]: op for op in WORKFLOW_OPERATIONS}["sanitize_file"]["contract_definition"]
 
-    assert [(p["name"], p["required"], p["value_type"]) for p in published["parameters"]] == [
-        ("file_selection", True, "mapping"),
-        ("outbox", True, "mapping"),
-        ("sanitization", True, "mapping"),
-        ("feed", True, "string"),
-        ("scope", False, "string"),
-    ]
+    assert list(contract["properties"]) == ['file_selection', 'outbox', 'feed', 'sanitization', 'scope']
+    assert contract["required"] == ['file_selection', 'outbox', 'feed', 'sanitization']
