@@ -167,53 +167,56 @@ def build_process_registry(adapter: Any) -> dict[str, Any]:
     load_files / validate_load / sql_apply). Stored procedures are routine
     bindings executed by the rey_lib DB utility layer, never one Python function
     per routine.
+
+    Each implementation takes the canonical WorkflowStep as an optional last
+    argument (Run.execute passes it); the legacy coordinator passes none.
     """
-    def file_operation(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+    def file_operation(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext, step: Any = None) -> StepResult:
         return _process_file_operation(ctx, run_log, config, run)
 
-    def sql_operation(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+    def sql_operation(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext, step: Any = None) -> StepResult:
         return _process_sql_operation(ctx, run_log, config, run, adapter)
 
-    def validate(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+    def validate(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext, step: Any = None) -> StepResult:
         return _process_validate(ctx, run_log, config, run)
 
-    def etl_operation(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+    def etl_operation(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext, step: Any = None) -> StepResult:
         return _process_etl_operation(ctx, run_log, config, run)
 
-    def transform_files(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+    def transform_files(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext, step: Any = None) -> StepResult:
         return _process_transform_files(ctx, run_log, config, run)
 
-    def load_files(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+    def load_files(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext, step: Any = None) -> StepResult:
         return _process_load_files(ctx, run_log, config, run)
 
-    def validate_load(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+    def validate_load(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext, step: Any = None) -> StepResult:
         return _process_validate_load(ctx, run_log, config, run)
 
-    def sql_apply(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
+    def sql_apply(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext, step: Any = None) -> StepResult:
         return _process_sql_apply(ctx, run_log, config, run)
 
     def inventory_source_files(ctx: Any, run_log: Any, config: dict[str, Any],
-                               run: RunContext) -> StepResult:
+                               run: RunContext, step: Any = None) -> StepResult:
         return _process_inventory_source_files(ctx, run_log, config, run)
 
     def classify_source_files(ctx: Any, run_log: Any, config: dict[str, Any],
-                              run: RunContext) -> StepResult:
+                              run: RunContext, step: Any = None) -> StepResult:
         return _process_classify_source_files(ctx, run_log, config, run)
 
     def sanitize_file(ctx: Any, run_log: Any, config: dict[str, Any],
-                      run: RunContext) -> StepResult:
+                      run: RunContext, step: Any = None) -> StepResult:
         return _process_sanitize_file(ctx, run_log, config, run)
 
     def excel_conversion(ctx: Any, run_log: Any, config: dict[str, Any],
-                         run: RunContext) -> StepResult:
+                         run: RunContext, step: Any = None) -> StepResult:
         return _process_excel_conversion(ctx, run_log, config, run)
 
     def profile_csv_record_types(ctx: Any, run_log: Any, config: dict[str, Any],
-                                 run: RunContext) -> StepResult:
+                                 run: RunContext, step: Any = None) -> StepResult:
         return _process_profile_csv_record_types(ctx, run_log, config, run)
 
     def create_prepared_files(ctx: Any, run_log: Any, config: dict[str, Any],
-                              run: RunContext) -> StepResult:
+                              run: RunContext, step: Any = None) -> StepResult:
         return _process_create_prepared_files(ctx, run_log, config, run)
 
     return {

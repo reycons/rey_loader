@@ -1180,6 +1180,10 @@ def get_registration() -> dict[str, Any]:
     Returns:
         Identity, entry point and published capability.
     """
+    # Deferred: rey_loader.workflow imports from this module.
+    from rey_lib.db.db_adapter import DBAdapter  # noqa: PLC0415
+    from rey_loader.workflow import build_process_registry  # noqa: PLC0415
+
     return {
         "name": APPLICATION_NAME,
         # What to CALL it, as distinct from what it is identified by. The name
@@ -1199,4 +1203,7 @@ def get_registration() -> dict[str, Any]:
         "entry_point": "main.py",
         "cli": CLI,
         "workflow_operations": WORKFLOW_OPERATIONS,
+        # The approved implementation for each published operation, as the
+        # finished mapping (backlog 963): what a canonical workflow step binds to.
+        "approved_implementations": build_process_registry(DBAdapter()),
     }
