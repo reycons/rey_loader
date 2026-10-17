@@ -53,8 +53,7 @@ def main() -> None:
     args = _parse_args()
     apply_env_overrides(args.env_overrides)
 
-    # build_ctx_from_args accepts either --config-path (standalone) or
-    # --ctx-file (pipeline step snapshot) and validates that one is present.
+    # build_ctx_from_args requires --config-path and validates that it is present.
     ctx = build_ctx_from_args(args, app_name=APP_NAME)
 
     # Stamp batch start time on ctx before any step runs. pre_run hooks
@@ -87,12 +86,10 @@ def main() -> None:
         # A failure propagates as its own AppError; app_runtime normalises
         # anything else and reports it once (rule 79).
         finally:
-            # Top-level owner (standalone run, not a pipeline step) explicitly creates
-            # the RESULTS_SUMMARY after its final RUN_COMPLETE — on success or failure.
-            # Pipeline steps (invoked with --ctx-file) leave finalization to
-            # pipeline_coordinator (SGC_Rey_Lib_Explicit_Results_Summary_Creation).
-            if not getattr(args, "ctx_file", None):
-                finalize_run_log(run_log, ai=getattr(ctx, "shared_ai", None))
+            # The top-level owner explicitly creates the RESULTS_SUMMARY after its
+            # final RUN_COMPLETE — on success or failure
+            # (SGC_Rey_Lib_Explicit_Results_Summary_Creation).
+            finalize_run_log(run_log, ai=getattr(ctx, "shared_ai", None))
 
 
 def _invocation_settings(
