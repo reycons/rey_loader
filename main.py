@@ -1,7 +1,7 @@
 """
 rey_loader — entry point.
 
-Runs loader public commands and explicit internal workflows. FTP is NOT a loader
+Runs loader public commands. FTP is NOT a loader
 concern — ftp_sync is sequenced ahead of rey_loader by pipeline_coordinator.
 
 Usage
@@ -9,9 +9,6 @@ Usage
     # Public commands:
     python main.py --config-path .../config.yaml transform
     python main.py --config-path .../config.yaml sql --source <sql_step>
-
-    # Explicit internal workflow:
-    python main.py --config-path .../config.yaml run-workflow --workflow transform_load
 """
 
 from __future__ import annotations
@@ -32,16 +29,13 @@ from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_f
 from rey_lib.logs import AppLogger
 from rey_lib.run_lifecycle import run_app_operation
 from rey_lib.logs import finalize_run_log
-from rey_lib.workflow.cli import add_workflow_selection_args, workflow_selection
 
-from rey_lib.db.db_adapter import DBAdapter
 
 from rey_loader.error_utils import ReyLoaderError
 from rey_lib.load import Source, Target, Transform
 from rey_loader.load import run_load, run_load_objects, run_load_one
 from rey_loader.sql_apply import run_sql_apply
 from rey_loader.transform import run_transform
-from rey_loader.workflow import needs_file_loop, run_file_workflow, run_process_workflow
 
 
 __all__: list[str] = []
@@ -85,10 +79,7 @@ def main() -> None:
                  operation, "apply" if apply else "dry-run")
 
         try:
-            if args.command == "run-workflow":
-                code = _run_workflow_command(ctx, run_log, args, apply)
-            else:
-                code = _run_app_command(ctx, run_log, args, apply, log)
+            code = _run_app_command(ctx, run_log, args, apply, log)
 
             log.info("rey_loader complete.")
             sys.exit(code)
@@ -102,23 +93,6 @@ def main() -> None:
             # pipeline_coordinator (SGC_Rey_Lib_Explicit_Results_Summary_Creation).
             if not getattr(args, "ctx_file", None):
                 finalize_run_log(run_log, ai=getattr(ctx, "shared_ai", None))
-
-
-def _run_workflow_command(ctx: object, run_log, args: argparse.Namespace, apply: bool) -> int:
-    """Run an explicitly named loader workflow."""
-    if not args.workflow:
-        raise ReyLoaderError("run-workflow requires --workflow <name>.")
-
-    # The step selection the shared engine resolves against the workflow's
-    # ordered steps: one step, or an inclusive range.
-    selection = workflow_selection(args)
-    if needs_file_loop(ctx, args.workflow):
-        return run_file_workflow(ctx, run_log, DBAdapter(), args.workflow, apply=apply,
-                                 **selection)
-    return run_process_workflow(
-        ctx, run_log, DBAdapter(), args.workflow, apply=apply, source=args.source,
-        **selection,
-    )
 
 
 def _invocation_settings(
@@ -406,30 +380,21 @@ def _check_load_arguments(args: argparse.Namespace) -> None:
 def _parse_args() -> argparse.Namespace:
     """Parse and validate CLI arguments.
 
-    Supports public commands, explicit ``run-workflow --workflow <name>``, and
-    an opt-in ``--dry-run``.
+    Supports the public commands and an opt-in ``--dry-run``.
     """
     parser = argparse.ArgumentParser(
-        description="rey_loader — internal ETL workflow runner"
+        description="rey_loader — loader commands"
     )
     add_config_args(parser)
     parser.add_argument(
         "command",
-        choices=("run-workflow", "transform", "load", "all", "sql"),
-        help="Public command, or run-workflow with --workflow.",
+        choices=("transform", "load", "all", "sql"),
+        help="Public command.",
     )
-    parser.add_argument(
-        "--workflow",
-        default=None,
-        help="Workflow name under 'workflows' in rey_loader config.",
-    )
-    # The runner's standard step selection, defined by the shared workflow
-    # layer rather than declared again here.
-    add_workflow_selection_args(parser)
     parser.add_argument(
         "--source",
         default="",
-        help="For sql / sql_apply workflow: the sql_step name.",
+        help="For sql: the sql_step name.",
     )
     parser.add_argument(
         "--file",

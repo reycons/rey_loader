@@ -132,7 +132,6 @@ class TestExitBehaviourIsUnchanged:
             return command_result
 
         monkeypatch.setattr(loader_main, "_run_app_command", _command)
-        monkeypatch.setattr(loader_main, "_run_workflow_command", _command)
         return collected
 
     def test_a_successful_command_exits_with_its_code(self, monkeypatch) -> None:

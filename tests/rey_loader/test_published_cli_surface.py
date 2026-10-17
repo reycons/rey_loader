@@ -3,7 +3,7 @@
 The screen used to show every parameter of every command at once, because the
 registration declared one flat list carried by a positional ``command``
 parameter and ``_commands`` gives each synthesised command the whole union. So
-``run-workflow`` offered a destination table, and ``load`` offered ``source`` --
+a command was offered a destination table it never read, and ``load`` offered ``source`` --
 an sql_step name no load path reads. The two only looked related because they
 were shown together.
 
@@ -30,9 +30,6 @@ from rey_loader.registration import get_registration
 
 #: What each command reads, measured from main.py:
 #:
-#:   _run_workflow_command   args.workflow, args.source, and the runner's
-#:                           step selection (step / from-step / to-step) through
-#:                           rey_lib.workflow.cli.workflow_selection
 #:   _execute_app_command    transform -> nothing; load -> the load options;
 #:                           all -> apply only; sql -> args.source
 #:
@@ -41,7 +38,6 @@ from rey_loader.registration import get_registration
 #: applies, so offering it a dry-run control would be a control with nothing
 #: behind it.
 CONSUMED: dict[str, set[str]] = {
-    "run-workflow": {"workflow", "source", "step", "from-step", "to-step", "dry-run"},
     "transform": set(),
     # `statement` and `source-connection` are the SOURCE end of the query
     # shapes; `table`, `connection` and `create` are a DATABASE destination
@@ -92,14 +88,6 @@ class TestEachCommandDeclaresWhatItReads:
         """
         assert "source" not in parameters("load")
         assert "source" in parameters("sql")
-        assert "source" in parameters("run-workflow")
-
-    def test_a_workflow_run_is_not_offered_a_destination(self) -> None:
-        offered = set(parameters("run-workflow"))
-        assert not offered & {"table", "connection", "create", "replace",
-                              "recreate", "append", "file-type",
-                              "data-source", "file", "statement",
-                              "source-connection"}
 
     def test_the_source_end_is_not_confused_with_the_destination(self) -> None:
         """Two connections, and the declaration says which is which.
@@ -119,10 +107,8 @@ class TestTheRecipesInvariants:
 
     def test_no_command_the_parser_exposes_was_dropped(self) -> None:
         # The five the positional `command` parameter used to carry. Losing one
-        # is how run-workflow itself once became unrunnable from the Console.
-        assert set(commands()) == {
-            "run-workflow", "transform", "load", "all", "sql",
-        }
+        # is how a command once became unrunnable from the Console.
+        assert set(commands()) == {"transform", "load", "all", "sql"}
 
     def test_every_parameter_is_reachable_from_some_command(self) -> None:
         # Narrowing per command must remove offers, never invocations.
@@ -132,13 +118,12 @@ class TestTheRecipesInvariants:
             for name in parameters(command)
         }
         assert declared == {
-            "workflow", "source", "file", "data-source", "statement",
+            "source", "file", "data-source", "statement",
             "sql-file", "source-connection", "transform", "transform-file",
             "http-adapter", "http-transform", "http-request",
             "table", "connection", "create", "replace", "recreate", "append",
             "out-file", "file-type", "dry-run",
             "file-manifest-id", "file-mutation-id", "file-type-id",
-            "step", "from-step", "to-step",
         }
 
     def test_one_declaration_style_only(self) -> None:
@@ -160,16 +145,15 @@ class TestRequirednessIsNeverOverstated:
     shape must not claim it. That is what `required_when` is for.
     """
 
-    def test_only_workflow_is_unconditionally_required(self) -> None:
-        # _run_workflow_command raises "run-workflow requires --workflow" with
-        # no mode involved. Every other requirement depends on a load shape.
+    def test_nothing_is_unconditionally_required(self) -> None:
+        # Every requirement depends on a load shape.
         required = {
             (command, name)
             for command in commands()
             for name, one in parameters(command).items()
             if one.get("required")
         }
-        assert required == {("run-workflow", "workflow")}
+        assert required == set()
 
     def test_the_load_alternatives_are_required_only_within_a_shape(self) -> None:
         for name in ("file", "data-source", "table", "connection"):
@@ -394,7 +378,7 @@ class TestExecutionModePlacement:
     def test_dry_run_is_declared_away_from_the_fields(self) -> None:
         # An execution mode is not part of what is being defined. Which
         # parameter that is belongs here; the Console recognises no name.
-        for command in ("run-workflow", "load", "all", "sql"):
+        for command in ("load", "all", "sql"):
             assert parameters(command)["dry-run"]["placement"] == "action_bar", command
 
     def test_nothing_else_leaves_the_form(self) -> None:

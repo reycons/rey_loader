@@ -1,11 +1,9 @@
 """Tests for the rey_loader single-file process-model workflow.
 
-Covers SGC_Rey_Loader_Workflow_Process_Model + the single-file run model
-(SGC_Rey_Loader_Single_File_Workflow_Run_Model): the generic process registry,
-one coordinator pass per run, discover_file binding a single file or a no-file
-signal, the rey_loader repeat-until-no-file loop, no-file skipping of file-scoped
-steps, sql_operation delegation to the DB utility layer, and etl_operation
-failing closed (never re-running the batch).
+The approved implementation catalog and its handlers: discover_file binding a
+single file or a no-file signal, sql_operation delegation to the DB utility
+layer, file operations, validation, and etl_operation failing closed (never
+re-running the batch).
 """
 
 from __future__ import annotations
@@ -34,9 +32,6 @@ from rey_loader.workflow import (
     _process_sql_operation,
     _process_validate,
     build_process_registry,
-    is_process_workflow,
-    run_file_workflow,
-    run_process_workflow,
 )
 
 
@@ -95,115 +90,6 @@ def test_build_process_registry_exposes_generic_groups():
         "inventory_source_files", "classify_source_files", "excel_conversion",
         "sanitize_file", "profile_csv_record_types", "create_prepared_files",
     }
-
-
-def test_is_process_workflow_detects_processes_block(run_log):
-    ctx = _NS(workflows=[_NS(name="w", app="rey_loader", processes=_NS(x=1))])
-    assert is_process_workflow(ctx, "w") is True
-    ctx2 = _NS(workflows=[_NS(name="s", app="rey_loader", steps=[])])
-    assert is_process_workflow(ctx2, "s") is False
-
-
-# ---------------------------------------------------------------------------
-# Single coordinator pass + rey_loader repeat loop
-# ---------------------------------------------------------------------------
-
-def test_run_process_workflow_is_a_single_ordered_pass(run_log):
-    order: list = []
-
-    def handler(ctx, run_log, config, run):
-        order.append(config.get("marker"))
-        return StepResult("x", "ok")
-
-    stub = {"file_operation": handler, "sql_operation": handler,
-            "validate": handler, "etl_operation": handler}
-    wf = _workflow(
-        _NS(id="s1", process="sql_operation", config=_NS(marker="s1")),
-        _NS(id="s2", process="file_operation", config=_NS(marker="s2",
-                                                          operation="discover_file")),
-        _NS(id="s3", process="validate", config=_NS(marker="s3")),
-    )
-    ctx = _NS(workflows=[wf], applications=_publishing(
-        "file_operation", "sql_operation", "validate", "etl_operation"))
-    with patch("rey_loader.workflow.build_process_registry", return_value=stub):
-        code = run_process_workflow(ctx, run_log, object(), "w", apply=True)
-    assert code == 0
-    assert order == ["s1", "s2", "s3"]
-
-
-def test_run_process_workflow_runs_only_the_selected_step(run_log):
-    order: list = []
-
-    def handler(ctx, run_log, config, run):
-        order.append(config.get("marker"))
-        return StepResult("x", "ok")
-
-    stub = {"sql_operation": handler, "validate": handler}
-    wf = _workflow(
-        _NS(id="s1", process="sql_operation", config=_NS(marker="s1")),
-        _NS(id="s2", process="validate", config=_NS(marker="s2")),
-    )
-    ctx = _NS(workflows=[wf], applications=_publishing("sql_operation", "validate"))
-    with patch("rey_loader.workflow.build_process_registry", return_value=stub):
-        code = run_process_workflow(ctx, run_log, object(), "w", apply=True, step="s1")
-    assert code == 0
-    assert order == ["s1"]
-
-
-def test_run_file_workflow_repeats_until_no_file(run_log):
-    calls = {"n": 0}
-
-    def fake_pass(ctx, run_log, adapter, name, *, apply=True):
-        calls["n"] += 1
-        object.__setattr__(ctx, "no_file", calls["n"] >= 3)
-        return 0
-
-    ctx = _NS()
-    with patch("rey_loader.workflow.run_process_workflow", side_effect=fake_pass):
-        code = run_file_workflow(ctx, run_log, object(), "w", apply=True)
-    assert code == 0
-    assert calls["n"] == 3  # two files processed, third pass finds no file
-
-
-def test_run_file_workflow_dry_run_is_single_pass(run_log):
-    calls = {"n": 0}
-
-    def fake_pass(ctx, run_log, adapter, name, *, apply=True):
-        calls["n"] += 1
-        object.__setattr__(ctx, "no_file", False)  # a file is always available
-        return 0
-
-    ctx = _NS()
-    with patch("rey_loader.workflow.run_process_workflow", side_effect=fake_pass):
-        run_file_workflow(ctx, run_log, object(), "w", apply=False)
-    assert calls["n"] == 1  # dry-run does not consume files, so it runs once
-
-
-def test_no_file_skips_file_scoped_steps(run_log):
-    ran: list = []
-
-    def discover(ctx, run_log, config, run):
-        object.__setattr__(ctx, "no_file", True)
-        ran.append("discover")
-        return StepResult("d", "ok")
-
-    def handler(ctx, run_log, config, run):
-        ran.append(config.get("id"))
-        return StepResult("x", "ok")
-
-    stub = {"file_operation": discover, "sql_operation": handler,
-            "validate": handler, "etl_operation": handler}
-    wf = _workflow(
-        _NS(id="discover", process="file_operation", config=_NS(operation="discover_file")),
-        _NS(id="batch_step", process="sql_operation", config=_NS(id="batch_step")),
-        _NS(id="file_step", process="validate", config=_NS(id="file_step", scope="file")),
-    )
-    ctx = _NS(workflows=[wf], no_file=False, applications=_publishing(
-        "file_operation", "sql_operation", "validate", "etl_operation"))
-    with patch("rey_loader.workflow.build_process_registry", return_value=stub):
-        run_process_workflow(ctx, run_log, object(), "w", apply=True)
-    assert "discover" in ran and "batch_step" in ran  # batch-scoped steps run
-    assert "file_step" not in ran                      # file-scoped step skipped
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@
 sql_apply has two explicit branches: with stop_on_error a failed file raises
 one DatabaseError from the original and is not reported locally; otherwise the
 failure is consumed and reported as the one AppError that represents it, and
-the next file applies. A failed workflow is status here.
+the next file applies.
 """
 
 from __future__ import annotations
@@ -76,25 +76,3 @@ def test_with_stop_on_error_the_failure_propagates_unreported(
     assert raised.value.__cause__ is not None
     assert [r for r in _errors(caplog) if r.name == sql_apply.__name__] == []
 
-
-def test_a_failed_workflow_is_status_and_returns_nonzero(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    from rey_loader import workflow
-
-    failed_run = SimpleNamespace(
-        status="failed", outcomes=[SimpleNamespace(status="failed", id="s1")],
-    )
-    with patch.object(workflow, "_get_workflow", return_value={"steps": [{}]}), \
-            patch.object(workflow, "_require"), \
-            patch.object(workflow, "_guarded_registry", return_value={}), \
-            patch.object(workflow, "build_process_registry", return_value={}), \
-            patch.object(workflow, "coordinate_workflow", return_value=failed_run), \
-            caplog.at_level(logging.WARNING):
-        assert workflow.run_process_workflow(
-            SimpleNamespace(), object(), object(), "wf", apply=False,
-        ) == 1
-
-    assert _errors(caplog) == []
-    (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert "failed at step: s1" in warning.getMessage()

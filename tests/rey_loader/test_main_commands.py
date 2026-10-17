@@ -13,68 +13,33 @@ def test_legacy_stage_mapping_is_removed() -> None:
     assert not hasattr(loader_main, "_STAGE_TO_WORKFLOW")
 
 
-def test_transform_command_runs_transform_without_workflow(run_log) -> None:
-    args = Namespace(command="transform", dry_run=False, source="", workflow=None)
+def test_transform_command_runs_transform(run_log) -> None:
+    args = Namespace(command="transform", dry_run=False, source="")
     log = Mock()
 
     with patch.object(loader_main, "run_transform", return_value=1) as transform, \
          patch.object(loader_main, "run_app_operation",
-                      side_effect=lambda _ctx, _run_log, _op, func, **_kw: func()) as lifecycle, \
-         patch.object(loader_main, "run_process_workflow") as workflow:
+                      side_effect=lambda _ctx, _run_log, _op, func, **_kw: func()) as lifecycle:
         assert loader_main._run_app_command(object(), run_log, args, True, log) == 0
 
     lifecycle.assert_called_once()
     assert lifecycle.call_args.args[2] == "transform"
     transform.assert_called_once()
-    workflow.assert_not_called()
 
 
-def test_sql_command_runs_sql_without_workflow(run_log) -> None:
+def test_sql_command_runs_sql(run_log) -> None:
     ctx = object()
-    args = Namespace(command="sql", dry_run=False, source="apply_sql", workflow=None)
+    args = Namespace(command="sql", dry_run=False, source="apply_sql")
     log = Mock()
 
     with patch.object(loader_main, "run_sql_apply") as sql_apply, \
          patch.object(loader_main, "run_app_operation",
-                      side_effect=lambda _ctx, _run_log, _op, func, **_kw: func()) as lifecycle, \
-         patch.object(loader_main, "run_process_workflow") as workflow:
+                      side_effect=lambda _ctx, _run_log, _op, func, **_kw: func()) as lifecycle:
         assert loader_main._run_app_command(ctx, run_log, args, True, log) == 0
 
     lifecycle.assert_called_once()
     assert lifecycle.call_args.args[2] == "sql"
     sql_apply.assert_called_once_with(ctx, ANY, "apply_sql")
-    workflow.assert_not_called()
-
-
-def test_run_workflow_uses_explicit_workflow_name(run_log) -> None:
-    ctx = object()
-    args = Namespace(command="run-workflow", workflow="transform_only", source="",
-                     step=None, from_step=None, to_step=None)
-
-    with patch.object(loader_main, "needs_file_loop", return_value=False), \
-         patch.object(loader_main, "run_process_workflow", return_value=0) as workflow:
-        assert loader_main._run_workflow_command(ctx, run_log, args, True) == 0
-
-    assert workflow.call_args.args[3] == "transform_only"
-
-
-def test_step_selection_reaches_the_workflow_engine(run_log) -> None:
-    """The selection is handed through run_process_workflow to the shared engine."""
-    from rey_loader import workflow as loader_workflow
-
-    args = Namespace(command="run-workflow", workflow="w", source="",
-                     step="inventory_source_files", from_step=None, to_step=None)
-    ctx = Mock()
-    run = Mock(status="success", outcomes=[])
-
-    with patch.object(loader_main, "needs_file_loop", return_value=False), \
-         patch.object(loader_workflow, "_get_workflow", return_value=Mock(steps=[])), \
-         patch.object(loader_workflow, "coordinate_workflow", return_value=run) as engine:
-        assert loader_main._run_workflow_command(ctx, run_log, args, True) == 0
-
-    assert engine.call_args.kwargs["step"] == "inventory_source_files"
-    assert engine.call_args.kwargs["from_step"] is None
-    assert engine.call_args.kwargs["to_step"] is None
 
 
 def test_a_command_records_what_it_was_invoked_with(run_log) -> None:
@@ -84,13 +49,12 @@ def test_a_command_records_what_it_was_invoked_with(run_log) -> None:
     and, without this, nothing about the arguments -- so the reader cannot see
     that --connection was empty, which is the whole explanation.
     """
-    args = Namespace(command="load", dry_run=False, source="", workflow=None,
+    args = Namespace(command="load", dry_run=False, source="",
                      file="test", table="test", connection="", create=False)
     log = Mock()
 
     with patch.object(loader_main, "run_app_operation",
-                      side_effect=lambda *_a, **kw: kw) as lifecycle, \
-         patch.object(loader_main, "run_process_workflow"):
+                      side_effect=lambda *_a, **kw: kw) as lifecycle:
         loader_main._run_app_command(object(), run_log, args, False, log)
 
     settings = lifecycle.call_args.kwargs["settings"]

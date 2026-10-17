@@ -34,7 +34,6 @@ from __future__ import annotations
 from typing import Any
 
 from rey_lib.files.file_loader import supported_file_types
-from rey_lib.workflow.cli import WORKFLOW_SELECTION_PARAMETERS
 
 __all__ = ["APPLICATION_NAME", "get_registration"]
 
@@ -149,7 +148,7 @@ _QUERY_TO_FILE = "query_to_file"
 #:
 #: DECLARED PER COMMAND, not as one union carried by a positional `command`
 #: parameter. Both styles resolve, but the union gives every command every
-#: field: `run-workflow` offered a destination table, and `load` offered
+#: field: a command offered a destination table, and `load` offered
 #: `source`, which is an sql_step name that no load path reads. The two only
 #: looked related because they were shown together.
 #:
@@ -157,33 +156,6 @@ _QUERY_TO_FILE = "query_to_file"
 #: any command -- so narrowing here removes no invocation. What it removes is
 #: the offer of one that does nothing.
 _COMMANDS: list[dict[str, Any]] = [
-    {
-        "name": "run-workflow",
-        "description": "Run a configured loader workflow by name.",
-        "parameters": [
-            {
-                "name": "workflow",
-                # REQUIRED, and unconditionally so: _run_workflow_command
-                # raises "run-workflow requires --workflow <name>" without it.
-                "required": True,
-                "value_type": "choice",
-                "possible_values_from": "workflows",
-                "description": "Workflow declared under 'workflows'.",
-            },
-            {
-                "name": "source",
-                "required": False,
-                "value_type": "string",
-                "placeholder": "sql_step_name",
-                "description": "For an sql or sql_apply workflow, which "
-                               "sql_step to run.",
-            },
-            # The runner's standard step selection, published from the shared
-            # workflow layer's one definition (backlog row 608).
-            *(dict(entry) for entry in WORKFLOW_SELECTION_PARAMETERS),
-            _DRY_RUN,
-        ],
-    },
     {
         "name": "transform",
         "description": "Transform every configured input file.",

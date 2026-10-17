@@ -1,31 +1,16 @@
 """
-rey_loader workflows — process registry, handlers, and runners.
+rey_loader workflow operations -- the approved implementation catalog and its handlers.
 
-Ownership: the shared coordinator (``rey_lib.workflow.run_workflow``) owns all
-workflow execution mechanics (sequencing, step/range selection, fail-closed
-behaviour, dry-run/apply propagation, run context, outcomes). This module owns
-only the loader domain: the process *registry* and *handlers* that wrap the
-existing, unchanged loader functions (transform, load, validate, sql-apply, and
-the per-file ingestion groups), plus the loader-owned single-file loop.
-
-This is an orchestration refactor only — every handler calls the existing loader
-function as-is. No transform/load behaviour, output, config semantics, or
-success/failure rules change here (SGC_Rey_Loader_Workflow_Coordinator_Alignment
-retired the private ``run_steps`` engine; all loader workflows now run through the
-shared coordinator). FTP is NOT a loader concern: there is no sync/ftp step
-(``pipeline_coordinator`` sequences ftp_sync -> rey_loader).
-
-Apply semantics: dry-run is supported, but to preserve current loader behaviour
-the default is apply=True. Database/file-mutating steps (load_files, sql_apply)
-declare ``apply_only`` in workflow config, so a dry-run skips them while transform
-still runs.
+The canonical Workflow (rey_lib.workflow) binds each WorkflowStep to an
+implementation this application approves (``build_process_registry``, published
+on the registration as ``approved_implementations``) and runs it through the
+step's Run. This module owns only the loader domain: the handlers that wrap the
+existing loader functions (transform, load, validate, sql-apply, the file
+operations and the per-file ingestion groups). It runs no workflow itself.
 
 Public API
 ----------
-build_process_registry  process name -> handler for the shared coordinator.
-run_process_workflow    Run one ordered workflow pass through the coordinator.
-run_file_workflow       Repeat single-file passes until discovery finds no file.
-needs_file_loop         True when a workflow discovers and processes files singly.
+build_process_registry  operation name -> approved implementation.
 """
 
 from __future__ import annotations
@@ -47,85 +32,20 @@ from rey_lib.load.profile import run_record_type_profiling
 from rey_loader import __version__ as _LOADER_VERSION
 from rey_lib.load.sanitize import run_file_sanitization
 from rey_lib.logs import AppLogger
-from rey_lib.workflow import (
-    RunContext,
-    StepResult,
-    run_workflow as coordinate_workflow,
-)
+from rey_lib.workflow import RunContext, StepResult
 
 from rey_loader.error_utils import ReyLoaderError
 from rey_loader.load import run_load
 from rey_loader.sql_apply import run_sql_apply
 from rey_loader.transform import run_transform
 
-__all__ = [
-    "build_process_registry",
-    "run_process_workflow",
-    "run_file_workflow",
-    "needs_file_loop",
-    "is_process_workflow",
-]
+__all__ = ["build_process_registry"]
 
 _logger = AppLogger(__name__)
-
-CONTRACT = "SGC_Rey_Loader_Internal_Workflow_Refactor"
-
-# This app's identity. Workflow ownership is ``app + name``; rey_loader consumes
-# only workflows assigned to itself from the resolved ctx (never another app's).
-APP_NAME = "rey_loader"
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _get_workflow(ctx: Any, name: str) -> Any:
-    """Return the named workflow config from the resolved ctx, or raise.
-
-    Consumes ``ctx.workflows`` only — no filesystem discovery — and enforces
-    ownership before returning: a workflow assigned to another app is refused,
-    so rey_loader can never list or run a workflow it does not own.
-    """
-    workflows = getattr(ctx, "workflows", None)
-    wf = None
-    if isinstance(workflows, list):
-        for item in workflows:
-            if str(getattr(item, "name", "")) == name:
-                wf = item
-                break
-    elif workflows is not None:
-        wf = getattr(workflows, name, None)
-    if wf is None:
-        raise ReyLoaderError(
-            f"workflow '{name}' not found in rey_loader config (ctx.workflows)."
-        )
-    _enforce_ownership(wf, name)
-    return wf
-
-
-def _enforce_ownership(wf: Any, name: str) -> None:
-    """Refuse a workflow owned by another app (fail-closed on mismatch).
-
-    Ownership is the resolved workflow's ``app`` property, stamped during ctx
-    construction. An empty owner is treated as this app's (backward compatible
-    with workflows authored before ownership stamping); a foreign owner raises.
-    """
-    owner = getattr(wf, "app", None) if not isinstance(wf, dict) else wf.get("app")
-    owner = str(owner or "")
-    if owner and owner != APP_NAME:
-        raise ReyLoaderError(
-            f"Workflow {name} is assigned to {owner} and cannot be executed "
-            f"by {APP_NAME}."
-        )
-
-
-def _require(obj: Any, key: str, label: str) -> Any:
-    """Return obj.key, raising ReyLoaderError when missing."""
-    value = getattr(obj, key, None) if not isinstance(obj, dict) else obj.get(key)
-    if value is None:
-        raise ReyLoaderError(f"workflow '{label}' is missing required '{key}'.")
-    return value
-
 
 def _as_list(value: Any) -> list[Any]:
     """Coerce a config value to a list."""
@@ -430,138 +350,6 @@ def _process_sanitize_file(ctx: Any, run_log: Any, config: dict[str, Any],
         "failed" if result.failures else "ok",
         detail,
     )
-
-
-# ---------------------------------------------------------------------------
-# Coordinator-per-file runner
-# ---------------------------------------------------------------------------
-
-def is_process_workflow(ctx: Any, name: str) -> bool:
-    """Return True when the named workflow uses the process/step shape."""
-    try:
-        wf = _get_workflow(ctx, name)
-    except ReyLoaderError:
-        return False
-    return _get(wf, "processes") is not None
-
-
-def needs_file_loop(ctx: Any, name: str) -> bool:
-    """Return True when the workflow discovers and processes files one at a time.
-
-    A single-file workflow declares a ``discover_file`` file_operation step and
-    must run under ``run_file_workflow`` (the repeat-until-no-file loop). Batch
-    workflows (no discovery) run exactly one coordinator pass. Detection is by the
-    step's process/operation, never by name guessing.
-    """
-    try:
-        wf = _get_workflow(ctx, name)
-    except ReyLoaderError:
-        return False
-    for step in _as_list(_get(wf, "steps")):
-        if str(_get(step, "process", "")) != "file_operation":
-            continue
-        config = _get(step, "config")
-        if str(_get(config, "operation", "")) == "discover_file":
-            return True
-    return False
-
-
-def run_file_workflow(ctx: Any, run_log: Any, adapter: Any, workflow_name: str, *,
-                      apply: bool = True, max_files: int = 100000,
-                      step: str | None = None, from_step: str | None = None,
-                      to_step: str | None = None) -> int:
-    """Repeatedly run a single-file workflow until discovery finds no file.
-
-    rey_loader owns the file-processing loop (the shared coordinator does not):
-    each ``run_process_workflow`` pass processes at most one discovered file,
-    bound to ``ctx.current_file`` by the ``discover_file`` step. When discovery
-    reports no eligible file (``ctx.no_file``) the loop stops cleanly. A dry-run
-    performs a single pass — files are not consumed, so repeating would
-    rediscover the same file. ``max_files`` bounds the loop as a safety net.
-
-    Step selection is refused rather than ignored. Each pass repeats the whole
-    workflow for one discovered file, and a selection that skipped
-    ``discover_file`` would never end the loop; nothing has needed it yet.
-    """
-    selected = {"step": step, "from_step": from_step, "to_step": to_step}
-    named = [f"--{key.replace('_', '-')}" for key, value in selected.items() if value]
-    if named:
-        raise ReyLoaderError(
-            f"workflow '{workflow_name}' runs once per discovered file and does "
-            f"not support step selection ({', '.join(named)})."
-        )
-    processed = 0
-    while processed < max_files:
-        object.__setattr__(ctx, "current_file", None)
-        object.__setattr__(ctx, "no_file", False)
-        code = run_process_workflow(ctx, run_log, adapter, workflow_name, apply=apply)
-        if code != 0:
-            return code
-        if getattr(ctx, "no_file", False):
-            break
-        processed += 1
-        if not apply:
-            break
-    _logger.info("workflow '%s' processed %d file(s) (%s).",
-                 workflow_name, processed, "apply" if apply else "dry-run")
-    return 0
-
-
-def run_process_workflow(ctx: Any, run_log: Any, adapter: Any, workflow_name: str, *,
-                         apply: bool = True, source: str = "",
-                         step: str | None = None, from_step: str | None = None,
-                         to_step: str | None = None) -> int:
-    """Execute one ordered workflow pass through the shared coordinator.
-
-    Used for both a single-file pass (via ``run_file_workflow``) and a batch
-    workflow run (once). The shared coordinator runs exactly one ordered pass.
-    For single-file workflows ``discover_file`` binds a single ``ctx.current_file``
-    or sets ``ctx.no_file``; file-scoped steps (``config.scope: file``) are skipped
-    when no file was found. ``source`` is loader-specific runtime input seeded into
-    the run metadata (the shared coordinator never learns loader concepts); the
-    ``sql_apply`` process reads it. ``step`` / ``from_step`` / ``to_step``
-    select one step or an inclusive range; the shared coordinator resolves them
-    against the workflow's ordered steps. Returns 0 / 1.
-    """
-    wf = _get_workflow(ctx, workflow_name)
-    _require(wf, "steps", workflow_name)
-    metadata = {
-        "workflow": workflow_name,
-        "source": source,
-        "mode": "apply" if apply else "dry-run",
-        "contracts": [CONTRACT],
-    }
-    registry = _guarded_registry(build_process_registry(adapter))
-    run = coordinate_workflow(ctx, run_log, wf, registry, apply=apply,
-                              step=step, from_step=from_step, to_step=to_step,
-                              metadata=metadata)
-    if run.status != "success":
-        failed = next((o for o in run.outcomes if o.status == "failed"), None)
-        # Status: the workflow owns its failed step and reported it; the
-        # non-zero exit marks this run failed (rule 79).
-        _logger.warning("workflow '%s' failed at step: %s",
-                        workflow_name, failed.id if failed else "?")
-        return 1
-    _logger.info("workflow '%s' pass complete (%s).",
-                 workflow_name, "apply" if apply else "dry-run")
-    return 0
-
-
-def _guarded_registry(registry: dict[str, Any]) -> dict[str, Any]:
-    """Wrap handlers to skip ``config.scope: file`` steps when no file was found.
-
-    Applied here, before the catalog is handed over, so what the coordinator
-    receives is already guarded. ``scope`` is published as an ordinary setting
-    and the engine validates it as declared data; what a scope means, and when a
-    run has no file, stay this application's answers.
-    """
-    def guard(handler: Any) -> Any:
-        def wrapped(ctx: Any, run_log: Any, config: dict[str, Any], run: RunContext) -> StepResult:
-            if getattr(ctx, "no_file", False) and str(_get(config, "scope", "")) == "file":
-                return StepResult("skipped", "skipped", "no file")
-            return handler(ctx, run_log, config, run)
-        return wrapped
-    return {name: guard(handler) for name, handler in registry.items()}
 
 
 # ---------------------------------------------------------------------------
