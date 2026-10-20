@@ -56,10 +56,8 @@ def ctx(tmp_path: Path) -> Namespace:
     """
     Minimal application context for transform-stage tests.
 
-    sql_configs and app_hooks are empty — no hook bindings fire, so no SQL
-    Server connection is needed by default. Tests that exercise hooks add
-    bindings explicitly (see TestRunTransformWithHooks in test_transform.py).
-    batch_id is pre-set to a known value so _build_constants can resolve it.
+    No SQL Server connection is needed. batch_id is pre-set to a known value
+    so _build_constants can resolve it.
     """
     # Suppress noisy logging during tests — only WARNING and above shows.
     logging.getLogger("rey_lib").setLevel(logging.WARNING)
@@ -73,8 +71,6 @@ def ctx(tmp_path: Path) -> Namespace:
         "cli_call":         "pytest",                 # stand-in for sys.argv
         "batch_id":         None,
         "batch_start_dt":   datetime(2026, 5, 8, 9, 0, 0),
-        "sql_configs":      [],
-        "app_hooks":        [],                       # run-level bindings; populated by tests as needed
         "data_sources":     [data_source],
     })
 
@@ -98,7 +94,6 @@ def _make_advantage_data_source(paths: Namespace) -> Namespace:
         max_files_per_run=10,
         paths=paths,
         transforms=transform_cfg,
-        transform_hooks=[],  # transform-level hook bindings; tests add as needed
         loads=[],            # load stage tested separately
     )
 
