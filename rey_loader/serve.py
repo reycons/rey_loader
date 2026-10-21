@@ -19,13 +19,17 @@ composition is this host's presentation of the three, under its ``PANEL_TYPE``.
 from __future__ import annotations
 
 import inspect
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Callable, Final, Mapping
+from typing import Any, Callable, Final, Mapping, Optional
 
-from rey_lib.errors.error_utils import AppError, ConfigError
+from rey_lib.errors.error_utils import AppError, ConfigError, StateError
 from rey_lib.files.data_file.base import DataFile
 from rey_lib.load import Source, Target, Transform
 from rey_lib.logs import AppLogger
+from rey_lib.run_lifecycle import run_app_operation
+
+from rey_loader.load import run_load_objects
 
 __all__ = ["PANEL_TYPE", "hosted_load", "serve"]
 
@@ -132,7 +136,10 @@ def _load_values(path: Path) -> dict[str, Any]:
     return values
 
 
-def serve(channel: Any, source: Source, transform: Transform, target: Target, ctx: Any) -> None:
+def serve(
+    channel: Any, source: Source, transform: Transform, target: Target, ctx: Any,
+    *, run_log: Any,
+) -> None:
     """Hold the Load for the launcher on ``channel`` until it closes or detaches.
 
     The launcher first receives the Load's projection. Then each command it sends
@@ -146,9 +153,15 @@ def serve(channel: Any, source: Source, transform: Transform, target: Target, ct
     - ``{"command": "preview", "request_id": ...}`` previews through the
       Transform and answers ``{"preview": ..., "projection": ..., "request_id":
       ...}``, both taken in one act of the Transform.
+    - ``{"command": "run", "dry_run": bool, "request_id": ...}`` performs one load
+      of the live objects as an operation of this application's Run (``_run``),
+      off the thread reading commands, and answers ``{"loaded": {"status",
+      "rows"}, "request_id"}``. While it runs, ``run``, ``operate`` and
+      ``preview`` are refused -- the load is reading the objects -- and
+      ``projection`` is answered.
     - ``{"command": "close"}`` -- the panel's explicit close, sent by
-      ``LaunchedApp.close`` -- releases the Transform's Source and Target and ends
-      serving.
+      ``LaunchedApp.close`` -- waits for a running load, then releases the
+      Transform's Source and Target and ends serving.
 
     A view going away, moving or being restored never reaches this channel: its
     stream ends at the Console, and it reattaches to the launcher by its token.
@@ -160,42 +173,62 @@ def serve(channel: Any, source: Source, transform: Transform, target: Target, ct
         channel: This application's end of the channel (AttachedApp.attach).
         source, transform, target: The Load's three objects (``hosted_load``).
         ctx: The runtime they are projected and operated in.
+        run_log: This application's run log, which records each load operation.
     """
     held = {"source": source, "transform": transform, "destination": target}
     channel.emit({"projection": _projection(ctx, source, transform, target)})
-    for command in channel.commands():
-        name = str(command.get("command") or "")
-        request_id = command.get("request_id")
-        if name == "close":
-            # THE SEMANTIC CLOSE, and the only thing that ends the hosted Load: the
-            # Transform stops referencing its two.
-            transform.release(source)
-            transform.release(target)
-            break
-        if name == "projection":
-            channel.emit({"projection": _projection(ctx, source, transform, target)})
-            continue
-        if name in ("operate", "preview"):
-            try:
-                if name == "operate":
-                    _operate(ctx, held, command)
-                    answer = {"projection": _projection(ctx, source, transform, target)}
-                else:
-                    answer = {**_preview(ctx, source, transform, target),
-                              "request_id": request_id}
-            # What the legacy preview answered rather than raised (LoadObjects.preview):
-            # an object's refusal, and a source that cannot be read or parsed.
-            except (AppError, ValueError, OSError) as refusal:
-                _answer_failure(channel, refusal, name, request_id)
+    running: Optional[Future[None]] = None
+    closed = False
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="rey_loader-load") as loading:
+        for command in channel.commands():
+            name = str(command.get("command") or "")
+            request_id = command.get("request_id")
+            if name == "close":
+                closed = True
+                break
+            if name == "projection":
+                channel.emit({"projection": _projection(ctx, source, transform, target)})
                 continue
-            channel.emit(answer)
-            continue
-        channel.emit({"error": f"rey_loader does not answer the command {name!r}.",
-                      "command": name, "request_id": request_id})
-    else:
-        # The launcher's handle is gone, and with it the token any view reattaches
-        # by: serving ends as workflow_app's does, and nothing is released here.
-        _logger.info("rey_loader serve: the launcher detached.")
+            if name in ("run", "operate", "preview") and running is not None \
+                    and not running.done():
+                _answer_failure(channel, StateError(
+                    f"A load is running; the {name} waits until it has finished."),
+                    name, request_id)
+                continue
+            if name == "run":
+                running = loading.submit(_run, channel, ctx, run_log, source, transform,
+                                         target, not bool(command.get("dry_run")),
+                                         request_id)
+                continue
+            if name in ("operate", "preview"):
+                try:
+                    if name == "operate":
+                        _operate(ctx, held, command)
+                        answer = {"projection": _projection(ctx, source, transform, target)}
+                    else:
+                        answer = {**_preview(ctx, source, transform, target),
+                                  "request_id": request_id}
+                # What the legacy preview answered rather than raised
+                # (LoadObjects.preview): an object's refusal, and a source that
+                # cannot be read or parsed.
+                except (AppError, ValueError, OSError) as refusal:
+                    _answer_failure(channel, refusal, name, request_id)
+                    continue
+                channel.emit(answer)
+                continue
+            channel.emit({"error": f"rey_loader does not answer the command {name!r}.",
+                          "command": name, "request_id": request_id})
+        else:
+            # The launcher's handle is gone, and with it the token any view
+            # reattaches by: serving ends as workflow_app's does, and nothing is
+            # released here.
+            _logger.info("rey_loader serve: the launcher detached.")
+    # Leaving the executor waited for a running load: closing is not cancelling.
+    if closed:
+        # THE SEMANTIC CLOSE, and the only thing that ends the hosted Load: the
+        # Transform stops referencing its two.
+        transform.release(source)
+        transform.release(target)
 
 
 def _projection(ctx: Any, source: Source, transform: Transform, target: Target) -> dict[str, Any]:
@@ -256,6 +289,45 @@ def _preview(ctx: Any, source: Source, transform: Transform, target: Target) -> 
                         "truncated": found.truncated},
             "projection": _projection(ctx, source, transform, target),
         }
+
+
+def _run(
+    channel: Any, ctx: Any, run_log: Any, source: Source, transform: Transform,
+    target: Target, apply: bool, request_id: Any,
+) -> None:
+    """Perform one load of the live objects, as an operation of this application's Run.
+
+    ``run_app_operation`` gives it its lifecycle in this application's run log --
+    RUN_START, the effects, RUN_COMPLETE -- exactly as the ``load`` command has one;
+    no Run of its own is made. A dry run records the operation and skips the load
+    entirely, as ``load --dry-run`` does: nothing is validated or executed.
+
+    The body answers the operation's protocol (0) and the rows go to the caller.
+    A failed load is the operation's, recorded RUN_COMPLETE failed and answered;
+    it does not fail this application's Run, which goes on serving.
+
+    The hosting application's answer boundary for one load (rule
+    exceptions_are_caught_narrowly, admitted 2026-10-21): run off the command
+    thread, a failure the load did not expect is converted to AppError with the
+    original as its cause, reported once and answered, and serving goes on with
+    the hosted Load alive.
+    """
+    loaded = {"rows": 0}
+
+    def body() -> int:
+        if not apply:
+            _logger.info("load skipped (dry-run).")
+            return 0
+        loaded["rows"] = run_load_objects(ctx, run_log, source, transform, target)
+        return 0
+
+    try:
+        run_app_operation(ctx, run_log, "load", body, settings={"apply": apply})
+    except Exception as exc:  # noqa: BLE001 -- the admitted load answer boundary
+        _answer_failure(channel, exc, "run", request_id)
+        return
+    channel.emit({"loaded": {"status": "SUCCEEDED", "rows": loaded["rows"]},
+                  "request_id": request_id})
 
 
 def _answer_failure(channel: Any, exc: Exception, command: str, request_id: Any) -> None:

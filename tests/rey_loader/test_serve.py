@@ -46,6 +46,28 @@ def _load(path: Path) -> tuple[Source, Transform, Target]:
     return source, Transform.from_source(SimpleNamespace(), source, {}, target=target), target
 
 
+class _RunLog:
+    """A stand-in for the application's run log: the records appended to it, in order."""
+
+    def __init__(self) -> None:
+        self.records: list[tuple[str, dict[str, Any]]] = []
+
+    def append(self, record_type: str, **fields: Any) -> int:
+        self.records.append((record_type, fields))
+        return len(self.records)
+
+    def set_nest_level(self, level: str) -> None:
+        del level
+
+    def require_structural_record(self, run_log_id: Any, record_type: str) -> None:
+        del run_log_id, record_type
+
+    def completions(self) -> list[str]:
+        """The status of each RUN_COMPLETE, in order."""
+        return [fields.get("status", "") for kind, fields in self.records
+                if kind == "RUN_COMPLETE"]
+
+
 class _Channel:
     """A stand-in for this application's end of the channel.
 
@@ -80,7 +102,7 @@ def _reports(monkeypatch: pytest.MonkeyPatch) -> list[AppError]:
 def test_serve_sends_the_composed_projection_first(tmp_path: Path) -> None:
     channel = _Channel([{"command": "close"}])
 
-    serve(channel, *_load(_rows(tmp_path)), ctx=SimpleNamespace())
+    serve(channel, *_load(_rows(tmp_path)), ctx=SimpleNamespace(), run_log=_RunLog())
 
     (first,) = channel.emitted
     projection = first["projection"]
@@ -101,7 +123,7 @@ def test_operate_calls_the_named_objects_own_method_and_answers_the_projection(
         {"command": "close"},
     ])
 
-    serve(channel, source, transform, target, ctx=SimpleNamespace())
+    serve(channel, source, transform, target, ctx=SimpleNamespace(), run_log=_RunLog())
 
     assert target.value("table") == "stage.rows"
     assert channel.emitted[-1]["projection"]["destination"]["values"]["table"] == "stage.rows"
@@ -117,7 +139,7 @@ def test_a_change_to_one_object_is_what_the_others_project_next(tmp_path: Path) 
         {"command": "close"},
     ])
 
-    serve(channel, *_load(_rows(tmp_path)), ctx=SimpleNamespace())
+    serve(channel, *_load(_rows(tmp_path)), ctx=SimpleNamespace(), run_log=_RunLog())
 
     assert channel.emitted[-1]["projection"]["transform"]["source_columns"] == ["x", "y", "z"]
 
@@ -134,7 +156,7 @@ def test_a_refusal_is_answered_and_serving_goes_on(
 ) -> None:
     channel = _Channel([{**command, "request_id": 7}, {"command": "projection"}])
 
-    serve(channel, *_load(_rows(tmp_path)), ctx=SimpleNamespace())
+    serve(channel, *_load(_rows(tmp_path)), ctx=SimpleNamespace(), run_log=_RunLog())
 
     assert channel.emitted[1] == {"error": message, "command": command["command"],
                                   "request_id": 7}
@@ -149,7 +171,7 @@ def test_an_objects_own_refusal_is_reported_and_answered(
          "arguments": {"policy": "obliterate"}, "request_id": 3},
     ])
 
-    serve(channel, *_load(_rows(tmp_path)), ctx=SimpleNamespace())
+    serve(channel, *_load(_rows(tmp_path)), ctx=SimpleNamespace(), run_log=_RunLog())
 
     assert channel.emitted[-1]["command"] == "operate"
     assert channel.emitted[-1]["request_id"] == 3
@@ -161,7 +183,7 @@ def test_preview_answers_the_result_with_the_projection_of_the_same_state(
 ) -> None:
     channel = _Channel([{"command": "preview", "request_id": "p1"}])
 
-    serve(channel, *_load(_rows(tmp_path)), ctx=SimpleNamespace())
+    serve(channel, *_load(_rows(tmp_path)), ctx=SimpleNamespace(), run_log=_RunLog())
 
     answer = channel.emitted[-1]
     assert answer["request_id"] == "p1"
@@ -179,7 +201,7 @@ def test_a_preview_of_a_vanished_file_is_answered_and_serving_goes_on(
     rows.unlink()
     channel = _Channel([{"command": "preview", "request_id": "p2"}, {"command": "projection"}])
 
-    serve(channel, *loaded, ctx=SimpleNamespace())
+    serve(channel, *loaded, ctx=SimpleNamespace(), run_log=_RunLog())
 
     assert channel.emitted[1]["command"] == "preview"
     assert channel.emitted[1]["request_id"] == "p2"
@@ -191,7 +213,7 @@ def test_the_explicit_close_releases_the_transforms_source_and_target(
 ) -> None:
     source, transform, target = _load(_rows(tmp_path))
 
-    serve(_Channel([{"command": "close"}]), source, transform, target, ctx=SimpleNamespace())
+    serve(_Channel([{"command": "close"}]), source, transform, target, ctx=SimpleNamespace(), run_log=_RunLog())
 
     with pytest.raises(StateError):
         transform.preview(SimpleNamespace())
@@ -201,7 +223,7 @@ def test_the_launcher_detaching_releases_nothing(tmp_path: Path) -> None:
     """Connection lifetime is not the Load's: only the semantic close releases it."""
     source, transform, target = _load(_rows(tmp_path))
 
-    serve(_Channel([]), source, transform, target, ctx=SimpleNamespace())
+    serve(_Channel([]), source, transform, target, ctx=SimpleNamespace(), run_log=_RunLog())
 
     assert transform.preview(SimpleNamespace()).columns == ("a", "b")
 
@@ -211,7 +233,8 @@ def test_a_projection_request_is_answered_while_serving(tmp_path: Path) -> None:
     commands: queue.Queue[Any] = queue.Queue()
     channel = _Channel(commands)
     served = threading.Thread(target=serve, args=(channel, *_load(_rows(tmp_path)),
-                                                   SimpleNamespace()), daemon=True)
+                                                   SimpleNamespace()),
+                              kwargs={"run_log": _RunLog()}, daemon=True)
     served.start()
     try:
         first = channel.pushed.get(timeout=WAIT)
@@ -221,6 +244,171 @@ def test_a_projection_request_is_answered_while_serving(tmp_path: Path) -> None:
         commands.put(None)
         served.join(timeout=WAIT)
     assert not served.is_alive()
+
+
+# -- a load, as an operation of the serving application's Run (S2) ----------------
+
+
+def _complete_or_refuse(rows: int = 2, held: threading.Event | None = None) -> Any:
+    """A stand-in for ``run_load_objects`` that needs no database.
+
+    It reads the live objects it is handed, as the real one does: an incomplete
+    Target is refused as ``run_selected_load`` refuses it, and a complete one
+    "loads" ``rows``. Given ``held``, it waits for it first.
+    """
+    calls: list[tuple[Any, ...]] = []
+
+    def load(ctx: Any, run_log: Any, source: Source, transform: Transform,
+             target: Target) -> int:
+        calls.append((source, transform, target))
+        if held is not None:
+            assert held.wait(WAIT)
+        problems = target.validate()
+        if problems:
+            raise ConfigError(f"The load is not complete. Target: {', '.join(problems)}.")
+        return rows
+
+    load.calls = calls  # type: ignore[attr-defined]
+    return load
+
+
+def _serving(tmp_path: Path, run_log: _RunLog, ctx: Any = None) -> tuple[
+        queue.Queue[Any], _Channel, threading.Thread, tuple[Source, Transform, Target]]:
+    commands: queue.Queue[Any] = queue.Queue()
+    channel = _Channel(commands)
+    loaded = _load(_rows(tmp_path))
+    served = threading.Thread(target=serve, args=(channel, *loaded, ctx or SimpleNamespace()),
+                              kwargs={"run_log": run_log}, daemon=True)
+    served.start()
+    assert "projection" in channel.pushed.get(timeout=WAIT)
+    return commands, channel, served, loaded
+
+
+def _answer(channel: _Channel, request_id: Any) -> dict[str, Any]:
+    """The next pushed message carrying ``request_id``."""
+    while True:
+        message = channel.pushed.get(timeout=WAIT)
+        if message.get("request_id") == request_id:
+            return message
+
+
+def test_a_failed_load_is_answered_and_serving_recovers_to_a_successful_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The acceptance sequence: fail, correct through operate, succeed, close normally.
+
+    The failed load is the operation's -- recorded RUN_COMPLETE failed and answered
+    -- and not the application's: ctx.run_failed is never set, so the serving Run
+    ends successfully.
+    """
+    load = _complete_or_refuse(rows=2)
+    monkeypatch.setattr("rey_loader.serve.run_load_objects", load)
+    run_log, ctx = _RunLog(), SimpleNamespace()
+    commands, channel, served, (_, _, target) = _serving(tmp_path, run_log, ctx)
+    try:
+        commands.put({"command": "run", "request_id": "b"})
+        failed = _answer(channel, "b")
+        assert failed["command"] == "run" and "not complete" in failed["error"]
+
+        for name, value in (("table", "stage.rows"), ("connection", "rey_apps")):
+            commands.put({"command": "operate", "object": "destination", "operation": "update",
+                          "arguments": {"name": name, "value": value}})
+            assert "projection" in channel.pushed.get(timeout=WAIT)
+
+        commands.put({"command": "run", "request_id": "c"})
+        assert _answer(channel, "c") == {"loaded": {"status": "SUCCEEDED", "rows": 2},
+                                         "request_id": "c"}
+        commands.put({"command": "close"})
+    finally:
+        commands.put(None)
+        served.join(timeout=WAIT)
+    assert not served.is_alive()
+    assert run_log.completions() == ["failed", "success"]
+    assert not getattr(ctx, "run_failed", False)
+    # Every load read the one live Target the reader corrected: nothing rebuilt.
+    assert all(called[2] is target for called in load.calls)
+
+
+def test_a_dry_run_records_the_operation_and_skips_the_load_entirely(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """As ``load --dry-run``: not validated, not executed, and a successful operation."""
+    load = _complete_or_refuse()
+    monkeypatch.setattr("rey_loader.serve.run_load_objects", load)
+    run_log = _RunLog()
+    commands, channel, served, _ = _serving(tmp_path, run_log)
+    try:
+        commands.put({"command": "run", "dry_run": True, "request_id": "d"})
+        assert _answer(channel, "d") == {"loaded": {"status": "SUCCEEDED", "rows": 0},
+                                         "request_id": "d"}
+    finally:
+        commands.put(None)
+        served.join(timeout=WAIT)
+    assert load.calls == []
+    assert run_log.records[0] == ("RUN_START", {"operation": "load",
+                                                "settings": {"apply": False}})
+    assert run_log.completions() == ["success"]
+
+
+def test_while_a_load_runs_only_the_projection_is_answered_and_close_waits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    held = threading.Event()
+    monkeypatch.setattr("rey_loader.serve.run_load_objects", _complete_or_refuse(held=held))
+    commands, channel, served, (source, transform, _) = _serving(tmp_path, _RunLog())
+    try:
+        commands.put({"command": "run", "request_id": "r"})
+        for refused in ({"command": "run", "request_id": 1},
+                        {"command": "operate", "object": "destination", "operation": "update",
+                         "arguments": {"name": "table", "value": "x"}, "request_id": 2},
+                        {"command": "preview", "request_id": 3}):
+            commands.put(refused)
+            answer = _answer(channel, refused["request_id"])
+            assert answer["error"] == (f"A load is running; the {refused['command']} "
+                                       "waits until it has finished.")
+        commands.put({"command": "projection"})
+        assert channel.pushed.get(timeout=WAIT)["projection"]["panel_type"] == "load"
+
+        commands.put({"command": "close"})
+        served.join(timeout=0.5)
+        assert served.is_alive()
+        # Not released while the load still reads them.
+        assert transform.preview(SimpleNamespace()).columns == ("a", "b")
+    finally:
+        held.set()
+        served.join(timeout=WAIT)
+        commands.put(None)
+    assert not served.is_alive()
+    assert "not complete" in _answer(channel, "r")["error"]
+    with pytest.raises(StateError):
+        transform.preview(SimpleNamespace())
+
+
+def test_an_unexpected_load_failure_is_answered_and_serving_goes_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _reports: list[AppError],
+) -> None:
+    """``_run`` is the hosting application's answer boundary for one load (#1151 S2).
+
+    Requires the exceptions_are_caught_narrowly admission of
+    rey_loader/rey_loader/serve.py _run.
+    """
+    def vanished(*_args: Any) -> int:
+        raise RuntimeError("the destination's disk vanished")
+
+    monkeypatch.setattr("rey_loader.serve.run_load_objects", vanished)
+    run_log = _RunLog()
+    commands, channel, served, _ = _serving(tmp_path, run_log)
+    try:
+        commands.put({"command": "run", "request_id": "u"})
+        assert _answer(channel, "u")["error"] == (
+            "rey_loader serve: the run failed: the destination's disk vanished")
+        assert isinstance(_reports[-1].__cause__, RuntimeError)
+        commands.put({"command": "projection"})
+        assert channel.pushed.get(timeout=WAIT)["projection"]["panel_type"] == "load"
+    finally:
+        commands.put(None)
+        served.join(timeout=WAIT)
+    assert run_log.completions() == ["failed"]
 
 
 # -- the opening identity -------------------------------------------------------
@@ -341,7 +529,7 @@ CHILD = textwrap.dedent(f"""
     application_run = AppExecute(run_id=100, control=None, subject_type="app",
                                  subject_id="rey_loader")
     channel = AttachedApp.attach(application_run.run_id)
-    serve(channel, *hosted_load(ctx, file=sys.argv[1]), ctx)
+    serve(channel, *hosted_load(ctx, file=sys.argv[1]), ctx, run_log=None)
     channel.close()
 """)
 

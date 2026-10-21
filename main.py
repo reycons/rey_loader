@@ -85,7 +85,7 @@ def main() -> None:
             # Held for the launcher, as workflow_app's and file_operator's serve are:
             # the session is this Application Run, not an operation run inside it.
             try:
-                sys.exit(_cmd_serve(ctx, args, log))
+                sys.exit(_cmd_serve(ctx, run_log, args, log))
             finally:
                 finalize_run_log(run_log, ai=getattr(ctx, "shared_ai", None))
         log.info("rey_loader starting — command=%s (mode=%s)",
@@ -106,13 +106,14 @@ def main() -> None:
             finalize_run_log(run_log, ai=getattr(ctx, "shared_ai", None))
 
 
-def _cmd_serve(ctx: Any, args: argparse.Namespace, log: Any) -> int:
+def _cmd_serve(ctx: Any, run_log: Any, args: argparse.Namespace, log: Any) -> int:
     """Open one Load by its identity, hold it for the launcher, and serve it.
 
     Launched through LaunchedApp.launch (recipe app.serve_a_live_object_to_a_panel;
     workflow_app and file_operator are the precedent). ``hosted_load`` builds the
     Source, Transform and Target the identity names; this process attaches with its
-    own Application Run and serves until the launcher closes or detaches.
+    own Application Run and serves until the launcher closes or detaches. Each load
+    it performs is an operation recorded in this Run's ``run_log``.
 
     Raises:
         ConfigError: If the identity names nothing that can be opened.
@@ -127,7 +128,7 @@ def _cmd_serve(ctx: Any, args: argparse.Namespace, log: Any) -> int:
     )
     channel = AttachedApp.attach(ctx.run.run_id)
     try:
-        serve(channel, source, transform, target, ctx)
+        serve(channel, source, transform, target, ctx, run_log=run_log)
     finally:
         channel.close()
     log.info("rey_loader complete — served a %s load.", source.selected_kind())
