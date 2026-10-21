@@ -79,7 +79,7 @@ def main() -> None:
     # context and, when this block exits, collects the shared runtime objects
     # it created. It encloses the finally below so the run log is finalized
     # while those objects are still live, and collection happens after.
-    with app_runtime(ctx=ctx, operation=operation) as (ctx, run_log):
+    with app_runtime(ctx=ctx, operation=operation, on_terminate="ABORTED") as (ctx, run_log):
         log = AppLogger(__name__)
         if operation == "serve":
             # Held for the launcher, as workflow_app's and file_operator's serve are:
