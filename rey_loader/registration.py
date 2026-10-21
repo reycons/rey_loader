@@ -518,6 +518,34 @@ _COMMANDS: list[dict[str, Any]] = [
             _DRY_RUN,
         ],
     },
+    {
+        # Launched through LaunchedApp.launch: holds the one live Load -- its
+        # Source, Transform and Target -- and serves it on the launcher's
+        # commands (#1151).
+        "name": "serve",
+        # Needs the launcher's channel, so the application runner does not offer it (#1166).
+        "invocation": "hosted",
+        "description": "Hold one load for the launcher attached through the app channel.",
+        # Exactly one identity; the parser refuses none or several, so none is
+        # required on its own. A statement comes with the connection it runs on.
+        "parameter_groups": [
+            {"name": "load_identity", "required": True, "mutually_exclusive": True,
+             "description": "A governed file, a file, or a statement.",
+             "members": ["file-manifest-id", "file-mutation-id", "file", "statement"]},
+        ],
+        "parameters": [
+            {"name": "file-manifest-id", "required": False, "value_type": "string",
+             "description": "A governed file, at its current state."},
+            {"name": "file-mutation-id", "required": False, "value_type": "string",
+             "description": "A governed file, at exactly that recorded state."},
+            {"name": "file", "required": False, "value_type": "path",
+             "description": "A file, by its path beneath the installation's permitted roots."},
+            {"name": "statement", "required": False, "value_type": "string",
+             "description": "A statement whose result is the load's source."},
+            {"name": "source-connection", "required": False, "value_type": "string",
+             "description": "With statement: the configured connection it runs on."},
+        ],
+    },
 ]
 
 #: The command-line surface this application exposes, as an assembler of a

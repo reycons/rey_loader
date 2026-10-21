@@ -215,7 +215,7 @@ class TestTheSurfaceIsRegistered:
 
         with patch.object(argparse.ArgumentParser, "add_argument", _record), \
              patch.object(argparse.ArgumentParser, "parse_args",
-                          return_value=argparse.Namespace()):
+                          return_value=argparse.Namespace(command="load")):
             rey_loader_main._parse_args()
         return captured
 

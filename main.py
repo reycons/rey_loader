@@ -9,6 +9,11 @@ Usage
     # Public commands:
     python main.py --config-path .../config.yaml transform
     python main.py --config-path .../config.yaml sql --source <sql_step>
+    python main.py --config-path .../config.yaml serve --file-manifest-id <id>
+
+``serve`` is launched through LaunchedApp.launch: it creates its Application Run,
+attaches to its launcher, builds the ONE Load from its identity, and serves it on
+command until the launcher closes or detaches (#1151).
 """
 
 from __future__ import annotations
@@ -29,11 +34,13 @@ from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_f
 from rey_lib.logs import AppLogger
 from rey_lib.run_lifecycle import run_app_operation
 from rey_lib.logs import finalize_run_log
+from rey_lib.run.app_channel import AttachedApp
 
 
 from rey_loader.error_utils import ReyLoaderError
 from rey_lib.load import Source, Target, Transform
 from rey_loader.load import run_load, run_load_objects, run_load_one
+from rey_loader.serve import hosted_load, serve
 from rey_loader.sql_apply import run_sql_apply
 from rey_loader.transform import run_transform
 
@@ -74,6 +81,13 @@ def main() -> None:
     # while those objects are still live, and collection happens after.
     with app_runtime(ctx=ctx, operation=operation) as (ctx, run_log):
         log = AppLogger(__name__)
+        if operation == "serve":
+            # Held for the launcher, as workflow_app's and file_operator's serve are:
+            # the session is this Application Run, not an operation run inside it.
+            try:
+                sys.exit(_cmd_serve(ctx, args, log))
+            finally:
+                finalize_run_log(run_log, ai=getattr(ctx, "shared_ai", None))
         log.info("rey_loader starting — command=%s (mode=%s)",
                  operation, "apply" if apply else "dry-run")
 
@@ -90,6 +104,34 @@ def main() -> None:
             # final RUN_COMPLETE — on success or failure
             # (SGC_Rey_Lib_Explicit_Results_Summary_Creation).
             finalize_run_log(run_log, ai=getattr(ctx, "shared_ai", None))
+
+
+def _cmd_serve(ctx: Any, args: argparse.Namespace, log: Any) -> int:
+    """Open one Load by its identity, hold it for the launcher, and serve it.
+
+    Launched through LaunchedApp.launch (recipe app.serve_a_live_object_to_a_panel;
+    workflow_app and file_operator are the precedent). ``hosted_load`` builds the
+    Source, Transform and Target the identity names; this process attaches with its
+    own Application Run and serves until the launcher closes or detaches.
+
+    Raises:
+        ConfigError: If the identity names nothing that can be opened.
+    """
+    source, transform, target = hosted_load(
+        ctx,
+        file_manifest_id=args.file_manifest_id or None,
+        file_mutation_id=args.file_mutation_id or None,
+        file=args.file or None,
+        source_connection=args.source_connection or None,
+        statement=args.statement or None,
+    )
+    channel = AttachedApp.attach(ctx.run.run_id)
+    try:
+        serve(channel, source, transform, target, ctx)
+    finally:
+        channel.close()
+    log.info("rey_loader complete — served a %s load.", source.selected_kind())
+    return 0
 
 
 def _invocation_settings(
@@ -385,7 +427,7 @@ def _parse_args() -> argparse.Namespace:
     add_config_args(parser)
     parser.add_argument(
         "command",
-        choices=("transform", "load", "all", "sql"),
+        choices=("transform", "load", "all", "sql", "serve"),
         help="Public command.",
     )
     parser.add_argument(
@@ -558,7 +600,42 @@ def _parse_args() -> argparse.Namespace:
         help="Skip database/file-mutating steps (load-files, sql-apply). "
              "Default applies changes, preserving current loader behaviour.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.command == "serve":
+        _check_serve_arguments(parser, args)
+    return args
+
+
+#: The identities `serve` opens one Load on, by the option giving each (#1151).
+_SERVE_IDENTITIES: tuple[str, ...] = (
+    "file_manifest_id", "file_mutation_id", "file", "statement",
+)
+
+
+def _check_serve_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Refuse a `serve` invocation that is not exactly one Load identity, by name.
+
+    A governed file, a handed-over file, or a statement with the connection it runs
+    on -- never ranked, never combined. Everything else a Load holds is the reader's
+    to set once it is served, so no other option is accepted.
+    """
+    given = [name for name in _SERVE_IDENTITIES if getattr(args, name)]
+    if len(given) != 1:
+        parser.error(
+            "serve requires exactly one of --file-manifest-id, --file-mutation-id, "
+            "--file, or --statement with --source-connection."
+        )
+    if bool(args.statement) != bool(args.source_connection):
+        parser.error("serve requires --statement and --source-connection together.")
+    accepted = (*_SERVE_IDENTITIES, "source_connection")
+    others = sorted(
+        name for name in (*_SOURCE_ARGUMENTS, *_TRANSFORM_ARGUMENTS, *_TARGET_ARGUMENTS,
+                          "data_source", "source", "dry_run")
+        if name not in accepted and getattr(args, name, None)
+    )
+    if others:
+        named = ", ".join(f"--{name.replace('_', '-')}" for name in others)
+        parser.error(f"serve opens a Load by its identity alone and does not accept {named}.")
 
 
 if __name__ == "__main__":

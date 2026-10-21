@@ -59,6 +59,10 @@ CONSUMED: dict[str, set[str]] = {
              "file-manifest-id", "file-mutation-id", "file-type-id"},
     "all": {"dry-run"},
     "sql": {"source", "dry-run"},
+    # The hosted Load's opening identity (#1151): exactly one of the first four,
+    # a statement with the connection it runs on.
+    "serve": {"file-manifest-id", "file-mutation-id", "file", "statement",
+              "source-connection"},
 }
 
 
@@ -108,7 +112,7 @@ class TestTheRecipesInvariants:
     def test_no_command_the_parser_exposes_was_dropped(self) -> None:
         # The five the positional `command` parameter used to carry. Losing one
         # is how a command once became unrunnable from the Console.
-        assert set(commands()) == {"transform", "load", "all", "sql"}
+        assert set(commands()) == {"transform", "load", "all", "sql", "serve"}
 
     def test_every_parameter_is_reachable_from_some_command(self) -> None:
         # Narrowing per command must remove offers, never invocations.
