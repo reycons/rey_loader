@@ -34,6 +34,9 @@ from __future__ import annotations
 from typing import Any
 
 from rey_lib.files.file_loader import supported_file_types
+from rey_lib.load.source import SOURCE_FIELD_METADATA
+from rey_lib.load.target import TARGET_FIELD_METADATA
+from rey_lib.load.transform import TRANSFORM_FIELD_METADATA
 
 __all__ = ["APPLICATION_NAME", "get_registration"]
 
@@ -96,6 +99,24 @@ _DRY_RUN: dict[str, Any] = {
 _SOURCE = "source"
 _TRANSFORM = "transform"
 _DESTINATION = "destination"
+
+#: What each object's fields ARE -- value type, meaning, an example of the form
+#: where one helps -- is that object's own vocabulary (#1151). This declaration
+#: reads it rather than stating it a second time.
+_FIELD_METADATA: dict[str, dict[str, dict[str, str]]] = {
+    _SOURCE: SOURCE_FIELD_METADATA,
+    _TRANSFORM: TRANSFORM_FIELD_METADATA,
+    _DESTINATION: TARGET_FIELD_METADATA,
+}
+
+
+def _described(parameters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The parameters, each one an object configures given that field's own metadata."""
+    return [
+        {**parameter, **_FIELD_METADATA[parameter["load_object"]][parameter["name"]]}
+        if parameter.get("load_object") else parameter
+        for parameter in parameters
+    ]
 
 _LOAD_SHAPE = "load_shape"
 _DISCOVERY = "discovery"
@@ -207,16 +228,14 @@ _COMMANDS: list[dict[str, Any]] = [
                 ],
             },
         ],
-        "parameters": [
+        # Each object's field is described by that object (``_described``).
+        "parameters": _described([
             {
                 "name": "file",
                 "load_object": _SOURCE,
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_CONFIGURED, _DIRECT]},
                 "mode_membership": {_LOAD_SHAPE: [_CONFIGURED, _DIRECT]},
-                "value_type": "path",
-                "placeholder": "/path/to/file.csv",
-                "description": "The one file to load.",
             },
             # -- the governed file, by identity ---------------------------
             #
@@ -232,40 +251,28 @@ _COMMANDS: list[dict[str, Any]] = [
                 "load_object": _SOURCE,
                 "required": False,
                 "mode_membership": {_LOAD_SHAPE: [_MANIFEST]},
-                "value_type": "string",
-                "description": "The governed file to load, by its manifest "
-                               "identity. The current state of that file is "
-                               "resolved from it.",
             },
             {
                 "name": "file-mutation-id",
                 "load_object": _SOURCE,
                 "required": False,
                 "mode_membership": {_LOAD_SHAPE: [_MANIFEST]},
-                "value_type": "string",
                 # A SPECIFIC MATERIALISED STATE, which is why this exists
                 # beside the manifest rather than being derived from it. Given
                 # one, that exact state is the working file and the
                 # effective-mutation rule is not consulted.
-                "description": "One specific materialised state of a governed "
-                               "file. Use it to load that state rather than "
-                               "the file's current one.",
             },
             {
                 "name": "file-type-id",
                 "load_object": _SOURCE,
                 "required": False,
                 "mode_membership": {_LOAD_SHAPE: [_MANIFEST]},
-                "value_type": "string",
                 # NEVER REQUIRED, and never inferred. It is the GOVERNING
                 # scope a caller intends to work within, not a fact about the
                 # file: the manifest's own type is returned either way, and
                 # promoting it would let a type-level edit reach every file of
                 # that type when nobody chose to. Omitted means the file opens
                 # read-only.
-                "description": "The file type to work within, where type-level "
-                               "configuration is being edited. Omit it to open "
-                               "the file without a governing scope.",
             },
             {
                 "name": "data-source",
@@ -294,11 +301,7 @@ _COMMANDS: list[dict[str, Any]] = [
                 "mode_membership": {
                     _LOAD_SHAPE: [_QUERY, _QUERY_FILE, _QUERY_TO_FILE],
                 },
-                "value_type": "choice",
                 "possible_values_from": "database_connections",
-                "description": "The connection the SOURCE statement runs on. "
-                               "The destination has its own, and they may "
-                               "differ.",
             },
             {
                 "name": "statement",
@@ -306,15 +309,6 @@ _COMMANDS: list[dict[str, Any]] = [
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_QUERY, _QUERY_TO_FILE]},
                 "mode_membership": {_LOAD_SHAPE: [_QUERY, _QUERY_TO_FILE]},
-                # SQL, SAID BY THE DECLARATION. A surface gives it a code
-                # editor because the value IS code -- the same way every other
-                # value_type decides its control, and without anything
-                # recognising a parameter called "statement". `sql-file` stays
-                # a path: it is the alternate transport for this text, not the
-                # text itself.
-                "value_type": "sql",
-                "placeholder": "select ... from ...",
-                "description": "The SOURCE query, whose result is loaded.",
             },
             {
                 "name": "sql-file",
@@ -322,10 +316,6 @@ _COMMANDS: list[dict[str, Any]] = [
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_QUERY_FILE]},
                 "mode_membership": {_LOAD_SHAPE: [_QUERY_FILE]},
-                "value_type": "path",
-                "placeholder": "/path/to/query.sql",
-                "description": "A file holding the SOURCE query, instead of "
-                               "giving it inline.",
             },
             {
                 "name": "out-file",
@@ -333,14 +323,10 @@ _COMMANDS: list[dict[str, Any]] = [
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_QUERY_TO_FILE]},
                 "mode_membership": {_LOAD_SHAPE: [_QUERY_TO_FILE]},
-                "value_type": "path",
-                "placeholder": "/path/to/rows.csv",
                 # NO FORMAT BESIDE IT. The suffix names it, through the same
                 # resolver every file source goes through, and a suffix that
                 # names nothing is refused rather than guessed at. `file-type`
                 # stays what it is -- a property of a file being READ.
-                "description": "The destination file. Its suffix names the "
-                               "format, and it needs no connection.",
             },
             {
                 "name": "transform",
@@ -349,15 +335,10 @@ _COMMANDS: list[dict[str, Any]] = [
                 "mode_membership": {
                     _LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE, _QUERY_TO_FILE],
                 },
-                "value_type": "string",
-                "placeholder": "columns: [{name: ..., source: ...}]",
                 # OPTIONAL IN EVERY SHAPE THAT HAS ONE, and not a mode of its
                 # own. A transform is not an alternative to a source or a
                 # destination -- it is the third object, and a load either
                 # states one or asks for its records as they are.
-                "description": "What each output column is and where it "
-                               "comes from. Omit it to load the rows "
-                               "unchanged.",
             },
             {
                 "name": "transform-file",
@@ -366,10 +347,6 @@ _COMMANDS: list[dict[str, Any]] = [
                 "mode_membership": {
                     _LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE, _QUERY_TO_FILE],
                 },
-                "value_type": "path",
-                "placeholder": "/path/to/transform.yaml",
-                "description": "A file holding that declaration, instead of "
-                               "giving it inline.",
             },
             {
                 "name": "http-adapter",
@@ -378,10 +355,7 @@ _COMMANDS: list[dict[str, Any]] = [
                 "mode_membership": {
                     _LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE, _QUERY_TO_FILE],
                 },
-                "value_type": "choice",
                 "possible_values_from": "http_operations",
-                "description": "The HTTP operation the records are sent through: "
-                               "a governed job of this installation.",
             },
             {
                 "name": "http-transform",
@@ -390,10 +364,6 @@ _COMMANDS: list[dict[str, Any]] = [
                 "mode_membership": {
                     _LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE, _QUERY_TO_FILE],
                 },
-                "value_type": "string",
-                "placeholder": "columns: [{name: ..., source: ...}]",
-                "description": "The column mapping applied to the records before "
-                               "they are sent. Omit it to send them as they are.",
             },
             {
                 "name": "http-request",
@@ -402,10 +372,6 @@ _COMMANDS: list[dict[str, Any]] = [
                 "mode_membership": {
                     _LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE, _QUERY_TO_FILE],
                 },
-                "value_type": "string",
-                "description": "The values set for the HTTP operation's request "
-                               "settings, as {part: {name: value}}. Omit it to send "
-                               "the operation's own.",
             },
             {
                 "name": "table",
@@ -413,9 +379,6 @@ _COMMANDS: list[dict[str, Any]] = [
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
                 "mode_membership": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
-                "value_type": "string",
-                "placeholder": "schema.table",
-                "description": "The destination, as schema.table.",
             },
             {
                 "name": "connection",
@@ -423,19 +386,13 @@ _COMMANDS: list[dict[str, Any]] = [
                 "required": False,
                 "required_when": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
                 "mode_membership": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
-                "value_type": "choice",
                 "possible_values_from": "database_connections",
-                "description": "The connection the DESTINATION is reached "
-                               "through.",
             },
             {
                 "name": "create",
                 "load_object": _DESTINATION,
                 "required": False,
                 "mode_membership": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
-                "value_type": "flag",
-                "description": "Create the destination from the source when "
-                               "it does not exist.",
             },
             # THE OTHER TWO DISPOSITIONS TOWARD A DESTINATION, and the three
             # exclude each other: `create` acts on one that is ABSENT, these on
@@ -446,58 +403,41 @@ _COMMANDS: list[dict[str, Any]] = [
                 "load_object": _DESTINATION,
                 "required": False,
                 "mode_membership": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
-                "value_type": "flag",
-                "description": "Replace the destination's contents with what "
-                               "this load carries. Its rows are removed first; "
-                               "the table, its constraints and its grants are "
-                               "not touched.",
             },
             {
                 "name": "recreate",
                 "load_object": _DESTINATION,
                 "required": False,
                 "mode_membership": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
-                "value_type": "flag",
-                # THE ONE THAT IS DESTRUCTIVE AT SCHEMA LEVEL, and it is said
-                # here rather than discovered: `replace` keeps the table it
-                # empties, this does not keep the table at all.
-                "description": "Destroy the destination and build it again "
-                               "from what this load carries. The table is "
-                               "dropped and created, so its indexes, "
-                               "constraints and triggers go with it and are "
-                               "not rebuilt.",
+                # THE ONE THAT IS DESTRUCTIVE AT SCHEMA LEVEL, and its
+                # description says so rather than leaving it to be discovered:
+                # `replace` keeps the table it empties, this does not keep the
+                # table at all.
             },
             {
                 "name": "append",
                 "load_object": _DESTINATION,
                 "required": False,
                 "mode_membership": {_LOAD_SHAPE: [_DIRECT, _MANIFEST, _QUERY, _QUERY_FILE]},
-                "value_type": "flag",
                 # NAMING WHAT ALREADY HAPPENS. A load told nothing adds to its
                 # destination and always has, so this changes no behaviour --
                 # it lets a reader SAY so, and lets a surface show which mode is
                 # in force rather than three empty controls over a load that is
                 # going to append anyway.
-                "description": "Add to the destination's contents. This is "
-                               "what a load does when told nothing.",
             },
             {
                 "name": "file-type",
                 "load_object": _SOURCE,
                 "required": False,
                 "mode_membership": {_LOAD_SHAPE: [_DIRECT]},
-                "value_type": "choice",
                 # READ, never restated. A format added to the loader appears
-                # here without this declaration being maintained.
+                # here without this declaration being maintained. Empty is a
+                # real answer: data_file_for resolves the format from the
+                # suffix when none is declared.
                 "possible_values": supported_file_types(),
-                # Empty is a real answer: data_file_for resolves the format
-                # from the suffix when none is declared.
-                "placeholder": "Auto detect",
-                "description": "The file's format, where its suffix does not "
-                               "name one.",
             },
             _DRY_RUN,
-        ],
+        ]),
     },
     {
         "name": "all",

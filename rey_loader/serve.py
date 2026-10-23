@@ -23,6 +23,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Final, Mapping, Optional
 
+from rey_lib.db.connection import build_connections, is_database_connection
 from rey_lib.errors.error_utils import AppError, ConfigError, StateError
 from rey_lib.files.data_file.base import DataFile
 from rey_lib.load import Source, Target, Transform
@@ -149,7 +150,7 @@ def serve(
       view that attaches to this running application draws what the objects hold.
     - ``{"command": "operate", "object": "source" | "transform" | "destination",
       "operation": ..., "arguments": {...}}`` calls that object's own method, in
-      its own act, and answers with the projection.
+      its own act, and answers ``{"projection": ..., "request_id": ...}``.
     - ``{"command": "preview", "request_id": ...}`` previews through the
       Transform and answers ``{"preview": ..., "projection": ..., "request_id":
       ...}``, both taken in one act of the Transform.
@@ -204,7 +205,8 @@ def serve(
                 try:
                     if name == "operate":
                         _operate(ctx, held, command)
-                        answer = {"projection": _projection(ctx, source, transform, target)}
+                        answer = {"projection": _projection(ctx, source, transform, target),
+                                  "request_id": request_id}
                     else:
                         answer = {**_preview(ctx, source, transform, target),
                                   "request_id": request_id}
@@ -232,12 +234,20 @@ def serve(
 
 
 def _projection(ctx: Any, source: Source, transform: Transform, target: Target) -> dict[str, Any]:
-    """The Load, as this host presents it: its type and each object's own projection."""
+    """The Load, as this host presents it: its type, each object's own projection, and
+    the configured database connections a reader may choose for either end.
+
+    The connections are this host's runtime, not either object's vocabulary
+    (file_operator's serve offers its query the same way): in configured order,
+    and which one is chosen is the reader's.
+    """
     return {
         "panel_type": PANEL_TYPE,
         "source": source.projection(ctx),
         "transform": transform.projection(ctx),
         "destination": target.projection(ctx),
+        "connections": [connection.name for connection in build_connections(ctx).values()
+                        if is_database_connection(connection)],
     }
 
 

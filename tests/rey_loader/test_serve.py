@@ -107,7 +107,14 @@ def test_serve_sends_the_composed_projection_first(tmp_path: Path) -> None:
     (first,) = channel.emitted
     projection = first["projection"]
     assert projection["panel_type"] == PANEL_TYPE == "load"
-    assert set(projection) == {"panel_type", "source", "transform", "destination"}
+    assert set(projection) == {"panel_type", "source", "transform", "destination",
+                               "connections"}
+    # The host's runtime offers no configured connection here.
+    assert projection["connections"] == []
+    # Each object describes its own fields, and offers its own choices.
+    assert projection["source"]["field_metadata"]["statement"]["value_type"] == "sql"
+    assert projection["destination"]["field_metadata"]["table"]["placeholder"] == "schema.table"
+    assert "file-type" in projection["source"]["choices"]
     assert projection["source"]["selected"] == "file"
     assert projection["transform"]["source_columns"] == ["a", "b"]
     assert projection["destination"]["selected"] == "database"
@@ -119,7 +126,7 @@ def test_operate_calls_the_named_objects_own_method_and_answers_the_projection(
     source, transform, target = _load(_rows(tmp_path))
     channel = _Channel([
         {"command": "operate", "object": "destination", "operation": "update",
-         "arguments": {"name": "table", "value": "stage.rows"}},
+         "arguments": {"name": "table", "value": "stage.rows"}, "request_id": "o1"},
         {"command": "close"},
     ])
 
@@ -127,6 +134,8 @@ def test_operate_calls_the_named_objects_own_method_and_answers_the_projection(
 
     assert target.value("table") == "stage.rows"
     assert channel.emitted[-1]["projection"]["destination"]["values"]["table"] == "stage.rows"
+    # Answered under the request it was asked as, so the browser can match it.
+    assert channel.emitted[-1]["request_id"] == "o1"
 
 
 def test_a_change_to_one_object_is_what_the_others_project_next(tmp_path: Path) -> None:
