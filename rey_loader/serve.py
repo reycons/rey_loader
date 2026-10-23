@@ -23,16 +23,19 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Final, Mapping, Optional
 
+from rey_lib.config.applications import configured_application
 from rey_lib.db.connection import build_connections, is_database_connection
 from rey_lib.errors.error_utils import AppError, ConfigError, StateError
 from rey_lib.files.data_file.base import DataFile
 from rey_lib.load import Source, Target, Transform
 from rey_lib.logs import AppLogger
+from rey_lib.run.capabilities import HostedCapabilities
 from rey_lib.run_lifecycle import run_app_operation
 
 from rey_loader.load import run_load_objects
+from rey_loader.registration import APPLICATION_NAME
 
-__all__ = ["PANEL_TYPE", "hosted_load", "serve"]
+__all__ = ["PANEL_TYPE", "hosted_capabilities", "hosted_load", "serve"]
 
 _logger = AppLogger(__name__)
 
@@ -137,9 +140,30 @@ def _load_values(path: Path) -> dict[str, Any]:
     return values
 
 
+def hosted_capabilities(
+    ctx: Any, control: Any, source: Source, transform: Transform, target: Target,
+    hosted_kind: str,
+) -> HostedCapabilities:
+    """The capabilities answered against the three objects this serve holds (#1199 S5).
+
+    The catalogue is this application's code: each key reaches one held object's
+    own definition -- never a composite of the three, and nothing that reads
+    records, columns or tables. ``hosted_kind`` is the identity this serve was
+    opened by. Whether a key may be invoked is HostedCapabilities' answer,
+    against this application's registration and governed declarations.
+    """
+    catalogue = {
+        "load_source.definition": lambda inputs: source.definition(),
+        "load_transform.definition": lambda inputs: transform.definition(),
+        "load_target.definition": lambda inputs: target.definition(),
+    }
+    return HostedCapabilities(configured_application(ctx, APPLICATION_NAME), control,
+                              catalogue, hosted_kind)
+
+
 def serve(
     channel: Any, source: Source, transform: Transform, target: Target, ctx: Any,
-    *, run_log: Any,
+    *, run_log: Any, capabilities: Any,
 ) -> None:
     """Hold the Load for the launcher on ``channel`` until it closes or detaches.
 
@@ -160,6 +184,10 @@ def serve(
       "rows"}, "request_id"}``. While it runs, ``run``, ``operate`` and
       ``preview`` are refused -- the load is reading the objects -- and
       ``projection`` is answered.
+    - ``{"command": "invoke", "capability": ..., "inputs": {...}, "request_id"}``
+      asks ``capabilities``, answered inline ``{"result": ..., "request_id"}``
+      (#1199 S5) -- a read of one held object, so a running load does not
+      refuse it.
     - ``{"command": "close"}`` -- the panel's explicit close, sent by
       ``LaunchedApp.close`` -- waits for a running load, then releases the
       Transform's Source and Target and ends serving.
@@ -175,6 +203,7 @@ def serve(
         source, transform, target: The Load's three objects (``hosted_load``).
         ctx: The runtime they are projected and operated in.
         run_log: This application's run log, which records each load operation.
+        capabilities: What may be invoked on the three objects (``hosted_capabilities``).
     """
     held = {"source": source, "transform": transform, "destination": target}
     channel.emit({"projection": _projection(ctx, source, transform, target)})
@@ -189,6 +218,15 @@ def serve(
                 break
             if name == "projection":
                 channel.emit({"projection": _projection(ctx, source, transform, target)})
+                continue
+            if name == "invoke":
+                try:
+                    answer = capabilities.invoke(str(command.get("capability") or ""),
+                                                 command.get("inputs", {}))
+                except AppError as refusal:
+                    _answer_failure(channel, refusal, name, request_id)
+                    continue
+                channel.emit({"result": answer, "request_id": request_id})
                 continue
             if name in ("run", "operate", "preview") and running is not None \
                     and not running.done():

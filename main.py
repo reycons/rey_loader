@@ -29,7 +29,7 @@ from typing import Any
 from rey_lib.config.cli import preparse_config_args
 preparse_config_args()
 
-from rey_lib.config.bootstrap import app_runtime
+from rey_lib.config.bootstrap import app_runtime, open_shared_control
 from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_from_args
 from rey_lib.logs import AppLogger
 from rey_lib.run_lifecycle import run_app_operation
@@ -40,7 +40,7 @@ from rey_lib.run.app_channel import AttachedApp
 from rey_loader.error_utils import ReyLoaderError
 from rey_lib.load import Source, Target, Transform
 from rey_loader.load import run_load, run_load_objects, run_load_one
-from rey_loader.serve import hosted_load, serve
+from rey_loader.serve import hosted_capabilities, hosted_load, serve
 from rey_loader.sql_apply import run_sql_apply
 from rey_loader.transform import run_transform
 
@@ -117,6 +117,8 @@ def _cmd_serve(ctx: Any, run_log: Any, args: argparse.Namespace, log: Any) -> in
 
     Raises:
         ConfigError: If the identity names nothing that can be opened.
+        ReyLoaderError: If the runtime has no control database to read the
+            capabilities' governed declarations through.
     """
     source, transform, target = hosted_load(
         ctx,
@@ -126,9 +128,19 @@ def _cmd_serve(ctx: Any, run_log: Any, args: argparse.Namespace, log: Any) -> in
         source_connection=args.source_connection or None,
         statement=args.statement or None,
     )
+    # What may be invoked on the three objects (#1199 S5), settled before they are
+    # served: the governed declarations are read through the shared Control, and
+    # the hosted kind is the one identity this serve was opened by.
+    control = open_shared_control(ctx).shared_control
+    if control is None:
+        raise ReyLoaderError("rey_loader serve: this runtime has no control database.")
+    opened_by = next(name for name in _SERVE_IDENTITIES if getattr(args, name))
+    capabilities = hosted_capabilities(ctx, control, source, transform, target,
+                                       opened_by.removesuffix("_id"))
     channel = AttachedApp.attach(ctx.run.run_id)
     try:
-        serve(channel, source, transform, target, ctx, run_log=run_log)
+        serve(channel, source, transform, target, ctx, run_log=run_log,
+              capabilities=capabilities)
     finally:
         channel.close()
     log.info("rey_loader complete — served a %s load.", source.selected_kind())

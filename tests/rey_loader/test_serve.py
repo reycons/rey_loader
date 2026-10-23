@@ -68,6 +68,18 @@ class _RunLog:
                 if kind == "RUN_COMPLETE"]
 
 
+class _Capabilities:
+    """A stand-in HostedCapabilities for the tests that do not invoke."""
+
+    def invoke(self, capability: str, inputs: Any) -> Any:
+        raise AssertionError(f"not invoked here: {capability}")
+
+
+def _hosting() -> dict[str, Any]:
+    """What a serve call in these tests is hosted with: a runtime, a run log, capabilities."""
+    return {"ctx": SimpleNamespace(), "run_log": _RunLog(), "capabilities": _Capabilities()}
+
+
 class _Channel:
     """A stand-in for this application's end of the channel.
 
@@ -102,7 +114,7 @@ def _reports(monkeypatch: pytest.MonkeyPatch) -> list[AppError]:
 def test_serve_sends_the_composed_projection_first(tmp_path: Path) -> None:
     channel = _Channel([{"command": "close"}])
 
-    serve(channel, *_load(_rows(tmp_path)), ctx=SimpleNamespace(), run_log=_RunLog())
+    serve(channel, *_load(_rows(tmp_path)), **_hosting())
 
     (first,) = channel.emitted
     projection = first["projection"]
@@ -130,7 +142,7 @@ def test_operate_calls_the_named_objects_own_method_and_answers_the_projection(
         {"command": "close"},
     ])
 
-    serve(channel, source, transform, target, ctx=SimpleNamespace(), run_log=_RunLog())
+    serve(channel, source, transform, target, **_hosting())
 
     assert target.value("table") == "stage.rows"
     assert channel.emitted[-1]["projection"]["destination"]["values"]["table"] == "stage.rows"
@@ -148,7 +160,7 @@ def test_a_change_to_one_object_is_what_the_others_project_next(tmp_path: Path) 
         {"command": "close"},
     ])
 
-    serve(channel, *_load(_rows(tmp_path)), ctx=SimpleNamespace(), run_log=_RunLog())
+    serve(channel, *_load(_rows(tmp_path)), **_hosting())
 
     assert channel.emitted[-1]["projection"]["transform"]["source_columns"] == ["x", "y", "z"]
 
@@ -165,7 +177,7 @@ def test_a_refusal_is_answered_and_serving_goes_on(
 ) -> None:
     channel = _Channel([{**command, "request_id": 7}, {"command": "projection"}])
 
-    serve(channel, *_load(_rows(tmp_path)), ctx=SimpleNamespace(), run_log=_RunLog())
+    serve(channel, *_load(_rows(tmp_path)), **_hosting())
 
     assert channel.emitted[1] == {"error": message, "command": command["command"],
                                   "request_id": 7}
@@ -180,7 +192,7 @@ def test_an_objects_own_refusal_is_reported_and_answered(
          "arguments": {"policy": "obliterate"}, "request_id": 3},
     ])
 
-    serve(channel, *_load(_rows(tmp_path)), ctx=SimpleNamespace(), run_log=_RunLog())
+    serve(channel, *_load(_rows(tmp_path)), **_hosting())
 
     assert channel.emitted[-1]["command"] == "operate"
     assert channel.emitted[-1]["request_id"] == 3
@@ -192,7 +204,7 @@ def test_preview_answers_the_result_with_the_projection_of_the_same_state(
 ) -> None:
     channel = _Channel([{"command": "preview", "request_id": "p1"}])
 
-    serve(channel, *_load(_rows(tmp_path)), ctx=SimpleNamespace(), run_log=_RunLog())
+    serve(channel, *_load(_rows(tmp_path)), **_hosting())
 
     answer = channel.emitted[-1]
     assert answer["request_id"] == "p1"
@@ -210,7 +222,7 @@ def test_a_preview_of_a_vanished_file_is_answered_and_serving_goes_on(
     rows.unlink()
     channel = _Channel([{"command": "preview", "request_id": "p2"}, {"command": "projection"}])
 
-    serve(channel, *loaded, ctx=SimpleNamespace(), run_log=_RunLog())
+    serve(channel, *loaded, **_hosting())
 
     assert channel.emitted[1]["command"] == "preview"
     assert channel.emitted[1]["request_id"] == "p2"
@@ -222,7 +234,7 @@ def test_the_explicit_close_releases_the_transforms_source_and_target(
 ) -> None:
     source, transform, target = _load(_rows(tmp_path))
 
-    serve(_Channel([{"command": "close"}]), source, transform, target, ctx=SimpleNamespace(), run_log=_RunLog())
+    serve(_Channel([{"command": "close"}]), source, transform, target, **_hosting())
 
     with pytest.raises(StateError):
         transform.preview(SimpleNamespace())
@@ -232,7 +244,7 @@ def test_the_launcher_detaching_releases_nothing(tmp_path: Path) -> None:
     """Connection lifetime is not the Load's: only the semantic close releases it."""
     source, transform, target = _load(_rows(tmp_path))
 
-    serve(_Channel([]), source, transform, target, ctx=SimpleNamespace(), run_log=_RunLog())
+    serve(_Channel([]), source, transform, target, **_hosting())
 
     assert transform.preview(SimpleNamespace()).columns == ("a", "b")
 
@@ -243,7 +255,8 @@ def test_a_projection_request_is_answered_while_serving(tmp_path: Path) -> None:
     channel = _Channel(commands)
     served = threading.Thread(target=serve, args=(channel, *_load(_rows(tmp_path)),
                                                    SimpleNamespace()),
-                              kwargs={"run_log": _RunLog()}, daemon=True)
+                              kwargs={"run_log": _RunLog(), "capabilities": _Capabilities()},
+                              daemon=True)
     served.start()
     try:
         first = channel.pushed.get(timeout=WAIT)
@@ -287,7 +300,8 @@ def _serving(tmp_path: Path, run_log: _RunLog, ctx: Any = None) -> tuple[
     channel = _Channel(commands)
     loaded = _load(_rows(tmp_path))
     served = threading.Thread(target=serve, args=(channel, *loaded, ctx or SimpleNamespace()),
-                              kwargs={"run_log": run_log}, daemon=True)
+                              kwargs={"run_log": run_log, "capabilities": _Capabilities()},
+                              daemon=True)
     served.start()
     assert "projection" in channel.pushed.get(timeout=WAIT)
     return commands, channel, served, loaded
@@ -534,11 +548,16 @@ CHILD = textwrap.dedent(f"""
         def authorize(self, raw_path):
             return Path(raw_path).resolve()
 
+    class NoCapabilities:
+        def invoke(self, capability, inputs):
+            raise AssertionError(capability)
+
     ctx = SimpleNamespace(paths=Paths())
     application_run = AppExecute(run_id=100, control=None, subject_type="app",
                                  subject_id="rey_loader")
     channel = AttachedApp.attach(application_run.run_id)
-    serve(channel, *hosted_load(ctx, file=sys.argv[1]), ctx, run_log=None)
+    serve(channel, *hosted_load(ctx, file=sys.argv[1]), ctx, run_log=None,
+          capabilities=NoCapabilities())
     channel.close()
 """)
 

@@ -38,7 +38,7 @@ from rey_lib.load.source import SOURCE_FIELD_METADATA
 from rey_lib.load.target import TARGET_FIELD_METADATA
 from rey_lib.load.transform import TRANSFORM_FIELD_METADATA
 
-__all__ = ["APPLICATION_NAME", "get_registration"]
+__all__ = ["APPLICATION_NAME", "CAPABILITIES", "SERVED_KINDS", "get_registration"]
 
 #: The registered identity. One value, matched against the installation's own
 #: declaration; a disagreement is refused rather than reconciled.
@@ -1080,6 +1080,49 @@ WORKFLOW_OPERATIONS: list[dict[str, Any]] = [
     },
 ]
 
+#: The identity kinds serve opens a Load on (main._SERVE_IDENTITIES, by the option
+#: giving each). Provisional (#1199 S5): no governed opening names them yet, and
+#: when #1151 establishes the opening vocabulary these follow it.
+SERVED_KINDS: list[str] = ["file_manifest", "file_mutation", "file", "statement"]
+
+#: The input contract of a definition: it takes nothing.
+_NO_INPUTS: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+}
+
+#: The canonical-object capabilities answered against the objects serve holds
+#: (#1199 S5): one read per held object -- Source, Transform, Target -- never a
+#: composite Load. Preview (records), run (execution) and the objects' edits are
+#: not capabilities.
+CAPABILITIES: list[dict[str, Any]] = [
+    {
+        "key": "load_source.definition",
+        "description": "What the held Source is: the kind in force, its configuration "
+                       "and what it still needs.",
+        "target_kinds": SERVED_KINDS,
+        "input_contract": _NO_INPUTS,
+        "access": "read",
+    },
+    {
+        "key": "load_transform.definition",
+        "description": "What the held Transform is: the kind in force, its configuration "
+                       "and its declaration.",
+        "target_kinds": SERVED_KINDS,
+        "input_contract": _NO_INPUTS,
+        "access": "read",
+    },
+    {
+        "key": "load_target.definition",
+        "description": "What the held Target is: the kind in force, its configuration, "
+                       "its write policy and what it still needs.",
+        "target_kinds": SERVED_KINDS,
+        "input_contract": _NO_INPUTS,
+        "access": "read",
+    },
+]
+
 
 def get_registration() -> dict[str, Any]:
     """Return this application's registration.
@@ -1113,4 +1156,7 @@ def get_registration() -> dict[str, Any]:
         # The approved implementation for each published operation, as the
         # finished mapping (backlog 963): what a canonical workflow step binds to.
         "approved_implementations": build_process_registry(DBAdapter()),
+        # Beside the operations, never inside them: what may be invoked on the
+        # objects a serve holds (#1199 S5).
+        "capabilities": CAPABILITIES,
     }
