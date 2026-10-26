@@ -26,7 +26,7 @@ from rey_lib.run.app_channel import LaunchedApp
 
 import main as loader_main
 from rey_loader.registration import get_registration
-from rey_loader.serve import _OPERATIONS, _ROLES, hosted_load, presentation_key, serve
+from rey_loader.serve import _OPERATIONS, _ROLES, _actions, hosted_load, presentation_key, serve
 
 _ROOT = Path(__file__).resolve().parents[2]
 
@@ -806,6 +806,22 @@ def test_a_field_is_its_own_action_and_its_object_says_which_operation_editing_i
         (declared,) = _by_role(projection["actions"]["transform"],
                                act="set", on="values", field=name)
         assert declared["command"]["operation"] == operation
+
+
+def test_a_field_drawn_with_a_request_has_its_own_action() -> None:
+    """Choosing OpenFIGI held nothing: http-adapter is drawn with the request, not in the
+    form fields, and had no action. Every drawn field has one -- with its own operation."""
+    actions = _actions({"transform": {
+        "fields": {"http": ["http-transform"]},
+        "request_fields": {"http": ["http-adapter"]},
+        "field_operations": {"http-adapter": "select_http_operation"},
+    }})
+
+    (adapter,) = _by_role(actions["transform"], act="set", on="values", field="http-adapter")
+    assert adapter["command"] == {"command": "operate", "object": "transform",
+                                  "operation": "select_http_operation",
+                                  "arguments": {"name": "http-adapter"}}
+    assert adapter["inputs"] == {"value": ["arguments", "value"]}
 
 
 def test_an_operation_its_object_does_not_offer_is_not_declared(tmp_path: Path) -> None:

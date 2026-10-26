@@ -441,8 +441,14 @@ def _actions(projected: Mapping[str, Mapping[str, Any]]) -> dict[str, list[dict[
         shown = projected.get(name) or {}
         offered = set(shown.get("operations") or [])
         field_operations = dict(shown.get("field_operations") or {})
-        fields = sorted({field for listed in (shown.get("fields") or {}).values()
-                         for field in listed})
+        # EVERY VALUE THE OBJECT HAS DRAWN: its form fields, the fields that choose a
+        # request it carries, and any field whose edit is an operation of its own.
+        fields = sorted(
+            {field for listed in (shown.get("fields") or {}).values() for field in listed}
+            | {field for listed in (shown.get("request_fields") or {}).values()
+               for field in listed}
+            | set(field_operations)
+        )
         listed: list[dict[str, Any]] = [
             {"role": {"act": "set", "on": "values", "field": field},
              "command": {"command": "operate", "object": name,
