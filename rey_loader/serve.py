@@ -13,7 +13,9 @@ Nothing here decides a Load's state: each object owns its own, and changes it on
 through its own methods. This builds the three objects from one opening identity,
 holds them, routes each command to the object it names, and composes the Load's
 projection from the three objects' own projections. There is no Load object: the
-composition is this host's presentation of the three, under its ``PANEL_TYPE``.
+composition is this host's presentation of the three, projected under the subject the
+live Load is (#1151): ``loader.`` and the first segment of the selected subject the
+Load acts on (``presentation_key``), whose tree.subject_panel row chooses its panel.
 """
 
 from __future__ import annotations
@@ -35,13 +37,14 @@ from rey_lib.run_lifecycle import run_app_operation
 from rey_loader.load import run_load_objects
 from rey_loader.registration import APPLICATION_NAME
 
-__all__ = ["PANEL_TYPE", "hosted_capabilities", "hosted_load", "serve"]
+__all__ = ["hosted_capabilities", "hosted_load", "presentation_key", "serve"]
 
 _logger = AppLogger(__name__)
 
-#: The presentation type of the Load this host composes. Which Console panel
-#: presents it is the Console's (``PANELS``); this only names what is presented.
-PANEL_TYPE: Final[str] = "load"
+#: The presentation subject of a live Load (#1151): this prefix and the first segment
+#: of the selected subject the Load acts on (file -> loader.file, mutation.record ->
+#: loader.mutation). Which panel presents it is its tree.subject_panel row.
+_PRESENTATION_PREFIX: Final[str] = "loader."
 
 #: The kinds a handed-over Source opens on: a viewer hands over a file, a query
 #: surface a statement and the connection it runs on.
@@ -102,8 +105,10 @@ def hosted_load(
             file is outside the installation's permitted roots.
     """
     if file_manifest_id or file_mutation_id:
+        # The launch inputs are text; the governed read takes and checks ids.
         source = Source.from_governed(
-            ctx, file_manifest_id=file_manifest_id, file_mutation_id=file_mutation_id,
+            ctx, file_manifest_id=_governed_id("file_manifest_id", file_manifest_id),
+            file_mutation_id=_governed_id("file_mutation_id", file_mutation_id),
         )
     elif file:
         authorized = ctx.paths.authorize(file)
@@ -120,6 +125,40 @@ def hosted_load(
     target = Target.from_declaration({})
     transform = Transform.from_source(ctx, source, {}, target=target)
     return source, transform, target
+
+
+#: How a reader reads the Source's query: a DatabaseQuery's reading state.
+_READING: Final[frozenset[str]] = frozenset(
+    {"pageable", "rows_per_page", "current_page", "order_by", "filters"})
+
+
+def _execute(channel: Any, query: Any, request_id: Any) -> None:
+    """Execute the Source's query as it is being read, and answer the reader (#1151).
+
+    The admitted answer boundary rey_db_admin and file_operator keep for the same
+    protocol: DatabaseQuery.execute owns the operation; a failure it did not expect
+    is converted to AppError, reported once and answered, and serving goes on.
+    """
+    try:
+        answer = query.execute()
+    except Exception as exc:  # noqa: BLE001 -- the admitted execution answer boundary
+        _answer_failure(channel, exc, "execute", request_id)
+        return
+    channel.emit({"result": answer, "request_id": request_id})
+
+
+def _governed_id(name: str, given: str | None) -> int | None:
+    """One governed identity from its launch input, as the id it names; None when absent.
+
+    Raises:
+        ConfigError: When the input is not a whole number.
+    """
+    if not given:
+        return None
+    try:
+        return int(given)
+    except ValueError as exc:
+        raise ConfigError(f"rey_loader serve: {name} is not an id: {given!r}.") from exc
 
 
 def _load_values(path: Path) -> dict[str, Any]:
@@ -163,7 +202,7 @@ def hosted_capabilities(
 
 def serve(
     channel: Any, source: Source, transform: Transform, target: Target, ctx: Any,
-    *, run_log: Any, capabilities: Any,
+    *, run_log: Any, capabilities: Any, declared: Any,
 ) -> None:
     """Hold the Load for the launcher on ``channel`` until it closes or detaches.
 
@@ -206,7 +245,11 @@ def serve(
         capabilities: What may be invoked on the three objects (``hosted_capabilities``).
     """
     held = {"source": source, "transform": transform, "destination": target}
-    channel.emit({"projection": _projection(ctx, source, transform, target)})
+    channel.emit({"projection": _projection(ctx, declared, source, transform, target)})
+    # How the reader is reading the Source's statement (#1151): the page, ordering
+    # and filters the SQL card last asked for. The statement and its connection are
+    # the Source's own and are never held here.
+    reading: dict[str, Any] = {}
     running: Optional[Future[None]] = None
     closed = False
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="rey_loader-load") as loading:
@@ -217,7 +260,33 @@ def serve(
                 closed = True
                 break
             if name == "projection":
-                channel.emit({"projection": _projection(ctx, source, transform, target)})
+                channel.emit({"projection": _projection(ctx, declared, source, transform, target)})
+                continue
+            if name == "update":
+                # THE SQL CARD'S LIVE QUERY IS THE SOURCE'S (#1151): its statement is
+                # the Source's field, the rest is how it is being read.
+                changes = dict(command.get("changes") or {})
+                try:
+                    if "statement" in changes:
+                        with source.act():
+                            source.update("statement", changes.pop("statement"))
+                    unknown = sorted(set(changes) - _READING)
+                    if unknown:
+                        raise ConfigError(f"The Source's query has no live property {unknown}.")
+                except AppError as refusal:
+                    _answer_failure(channel, refusal, name, request_id)
+                    continue
+                reading.update(changes)
+                channel.emit({"projection": _projection(ctx, declared, source, transform, target)})
+                continue
+            if name == "execute":
+                try:
+                    query = source.query(ctx)
+                    query.update(**reading)
+                except AppError as refusal:
+                    _answer_failure(channel, refusal, name, request_id)
+                    continue
+                loading.submit(_execute, channel, query, request_id)
                 continue
             if name == "invoke":
                 try:
@@ -243,10 +312,10 @@ def serve(
                 try:
                     if name == "operate":
                         _operate(ctx, held, command)
-                        answer = {"projection": _projection(ctx, source, transform, target),
+                        answer = {"projection": _projection(ctx, declared, source, transform, target),
                                   "request_id": request_id}
                     else:
-                        answer = {**_preview(ctx, source, transform, target),
+                        answer = {**_preview(ctx, declared, source, transform, target),
                                   "request_id": request_id}
                 # What the legacy preview answered rather than raised
                 # (LoadObjects.preview): an object's refusal, and a source that
@@ -271,22 +340,135 @@ def serve(
         transform.release(target)
 
 
-def _projection(ctx: Any, source: Source, transform: Transform, target: Target) -> dict[str, Any]:
-    """The Load, as this host presents it: its type, each object's own projection, and
-    the configured database connections a reader may choose for either end.
+def presentation_key(subject: str) -> str:
+    """The subject the live Load presents itself as (#1151).
+
+    ``loader.`` and the first segment of the selected subject the Load acts on:
+    ``file`` -> ``loader.file``, ``mutation.record`` -> ``loader.mutation``. The
+    selected subject is the Tree row's own, passed by the Load interaction; which
+    panel presents the Load is the result's tree.subject_panel row.
+
+    Raises:
+        ConfigError: When no selected subject was given.
+    """
+    head = str(subject or "").strip().split(".", 1)[0]
+    if not head:
+        raise ConfigError("rey_loader serve: a Load opens on the selected subject it acts on; "
+                          "none was given.")
+    return f"{_PRESENTATION_PREFIX}{head}"
+
+
+def _projection(ctx: Any, declared: Any, source: Source, transform: Transform,
+                target: Target) -> dict[str, Any]:
+    """The Load, as this host presents it: its governed presentation (``declared``, the
+    Projection of its subject), each object's own projection, and the configured
+    database connections a reader may choose for either end.
 
     The connections are this host's runtime, not either object's vocabulary
     (file_operator's serve offers its query the same way): in configured order,
     and which one is chosen is the reader's.
     """
-    return {
-        "panel_type": PANEL_TYPE,
+    projected = {
         "source": source.projection(ctx),
         "transform": transform.projection(ctx),
         "destination": target.projection(ctx),
+    }
+    return declared.projecting({
+        **projected,
+        # What can be invoked, each with the complete command that invokes it
+        # (#1151, the Workflow pattern): the panel sends it unchanged.
+        "actions": _actions(projected),
         "connections": [connection.name for connection in build_connections(ctx).values()
                         if is_database_connection(connection)],
-    }
+    }).to_dict()
+
+
+#: Operations an object offers only when its own projection says it can (#1151): the
+#: Source saves its query, the Transform saves itself, only where each declares so.
+_DECLARED_OPERATIONS: Final[frozenset[str]] = frozenset({"save_query", "save"})
+
+
+#: WHAT EACH ROUTED OPERATION DOES TO THE PROJECTED STATE A CONTROL DRAWS (#1151 row 5):
+#: its role -- an ``act`` on ``on``, a key of its object's projection (with ``field``
+#: for one value) -- and each role input's method parameter. A surface finds an action
+#: by the state it draws and what it does to it, never by the operation's name. An
+#: operation with no role here is reached through a field edit (``update``, or its
+#: object's ``field_operations``) and is not otherwise presented.
+_ROLES: Final[dict[str, dict[str, tuple[dict[str, str], dict[str, str]]]]] = {
+    "source": {
+        "select": ({"act": "choose", "on": "kinds"}, {"choice": "kind"}),
+        "save_query": ({"act": "save", "on": "values", "field": "statement"}, {}),
+        "save_saved_settings": ({"act": "save", "on": "saved_settings"},
+                                {"settings": "settings"}),
+    },
+    "transform": {
+        "select": ({"act": "choose", "on": "kinds"}, {"choice": "kind"}),
+        "edit_column": ({"act": "set", "on": "columns"},
+                        {"index": "at", "field": "field", "value": "value"}),
+        "edit_column_setting": ({"act": "set", "on": "column_settings"},
+                                {"index": "at", "setting": "setting", "value": "value"}),
+        "add_column": ({"act": "add", "on": "columns"}, {"after": "after"}),
+        "move_column": ({"act": "move", "on": "columns"}, {"index": "at", "to": "to"}),
+        "edit_request_field": ({"act": "set", "on": "http_request"},
+                               {"part": "part", "name": "name", "value": "value"}),
+        "save": ({"act": "save", "on": "columns"}, {}),
+        "select_saved_setting": ({"act": "choose", "on": "saved_settings"},
+                                 {"choice": "transform_id"}),
+        "new_saved_setting": ({"act": "add", "on": "saved_settings"}, {}),
+        "delete_saved_setting": ({"act": "remove", "on": "saved_settings"}, {}),
+    },
+    "destination": {
+        "select": ({"act": "choose", "on": "kinds"}, {"choice": "kind"}),
+        "set_write_policy": ({"act": "choose", "on": "modes"}, {"choice": "policy"}),
+    },
+}
+
+
+def _actions(projected: Mapping[str, Mapping[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """The Load's invokable actions, each ``{role, command, inputs?}`` (#1151).
+
+    Derived, never a second capability model: from this host's own routing table
+    (``_OPERATIONS``, with each operation's role, ``_ROLES``) and from what the
+    objects already declare -- their fields and field operations, and the operations
+    they offer. ``role`` says what the action does to which projected state;
+    ``command`` is the complete command this host answers; ``inputs`` maps each of
+    the role's inputs a reader supplies to its path in that command. A field is its
+    own action, setting that value: which operation editing it invokes is the
+    object's ``field_operations`` answer, else ``update``.
+    """
+    actions: dict[str, list[dict[str, Any]]] = {}
+    for name in _OPERATIONS:
+        shown = projected.get(name) or {}
+        offered = set(shown.get("operations") or [])
+        field_operations = dict(shown.get("field_operations") or {})
+        fields = sorted({field for listed in (shown.get("fields") or {}).values()
+                         for field in listed})
+        listed: list[dict[str, Any]] = [
+            {"role": {"act": "set", "on": "values", "field": field},
+             "command": {"command": "operate", "object": name,
+                         "operation": field_operations.get(field, "update"),
+                         "arguments": {"name": field}},
+             "inputs": {"value": ["arguments", "value"]}}
+            for field in fields
+        ]
+        for operation, (role, inputs) in _ROLES[name].items():
+            if operation in _DECLARED_OPERATIONS and operation not in offered:
+                continue
+            listed.append({
+                "role": dict(role),
+                "command": {"command": "operate", "object": name, "operation": operation,
+                            "arguments": {}},
+                **({"inputs": {given: ["arguments", parameter]
+                               for given, parameter in inputs.items()}} if inputs else {}),
+            })
+        actions[name] = listed
+    actions["load"] = [
+        {"role": {"act": "read", "on": "load"}, "command": {"command": "projection"}},
+        {"role": {"act": "read", "on": "preview"}, "command": {"command": "preview"}},
+        {"role": {"act": "run", "on": "load"}, "command": {"command": "run"},
+         "inputs": {"dry_run": ["dry_run"]}},
+    ]
+    return actions
 
 
 def _operate(ctx: Any, held: Mapping[str, Any], command: Mapping[str, Any]) -> None:
@@ -320,7 +502,8 @@ def _operate(ctx: Any, held: Mapping[str, Any], command: Mapping[str, Any]) -> N
         method(instance, **given)
 
 
-def _preview(ctx: Any, source: Source, transform: Transform, target: Target) -> dict[str, Any]:
+def _preview(ctx: Any, declared: Any, source: Source, transform: Transform,
+             target: Target) -> dict[str, Any]:
     """Preview through the Transform, with the Load's projection of the same state.
 
     The Transform's own preview (backlog 831), in one act of the Transform with the
@@ -335,7 +518,7 @@ def _preview(ctx: Any, source: Source, transform: Transform, target: Target) -> 
         return {
             "preview": {"columns": list(found.columns), "rows": list(found.rows),
                         "truncated": found.truncated},
-            "projection": _projection(ctx, source, transform, target),
+            "projection": _projection(ctx, declared, source, transform, target),
         }
 
 

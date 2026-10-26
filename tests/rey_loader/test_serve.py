@@ -8,6 +8,7 @@ objects' own projections.
 
 from __future__ import annotations
 
+import inspect
 import queue
 import sys
 import textwrap
@@ -20,11 +21,12 @@ import pytest
 
 from rey_lib.errors.error_utils import AppError, ConfigError, StateError
 from rey_lib.load import Source, Target, Transform
+from rey_lib.presentation import Projection
 from rey_lib.run.app_channel import LaunchedApp
 
 import main as loader_main
 from rey_loader.registration import get_registration
-from rey_loader.serve import PANEL_TYPE, hosted_load, serve
+from rey_loader.serve import _OPERATIONS, _ROLES, hosted_load, presentation_key, serve
 
 _ROOT = Path(__file__).resolve().parents[2]
 
@@ -75,9 +77,16 @@ class _Capabilities:
         raise AssertionError(f"not invoked here: {capability}")
 
 
+#: The governed presentation of a Load opened on a selected file (#1151).
+_DECLARED = Projection(subject_key="loader.file", panel="loader_panel", panel_settings={},
+                       content={})
+
+
 def _hosting() -> dict[str, Any]:
-    """What a serve call in these tests is hosted with: a runtime, a run log, capabilities."""
-    return {"ctx": SimpleNamespace(), "run_log": _RunLog(), "capabilities": _Capabilities()}
+    """What a serve call in these tests is hosted with: a runtime, a run log, capabilities,
+    and the Load's governed presentation."""
+    return {"ctx": SimpleNamespace(), "run_log": _RunLog(), "capabilities": _Capabilities(),
+            "declared": _DECLARED}
 
 
 class _Channel:
@@ -111,6 +120,63 @@ def _reports(monkeypatch: pytest.MonkeyPatch) -> list[AppError]:
     return reported
 
 
+class _Query:
+    """A stand-in DatabaseQuery: what it was built with, read with and answered."""
+
+    def __init__(self, statement: str, connection: str) -> None:
+        self.statement, self.connection = statement, connection
+        self.reading: dict[str, Any] = {}
+
+    def update(self, **changes: Any) -> None:
+        self.reading.update(changes)
+
+    def execute(self) -> dict[str, Any]:
+        return {"pageable": True, "rows": [{"statement": self.statement}]}
+
+
+def _database_load(monkeypatch: pytest.MonkeyPatch) -> tuple[Source, Transform, Target]:
+    """A Load on a database Source whose query is the stand-in, built from its own fields."""
+    source = Source.from_declaration({"values": {
+        "statement": "select 1", "source-connection": "file_reader"}, "selected": "database"})
+    monkeypatch.setattr(source, "query", lambda ctx: _Query(
+        str(source.value("statement")), str(source.value("source-connection"))))
+    target = Target.from_declaration({})
+    return source, Transform.from_source(SimpleNamespace(), source, {}, target=target), target
+
+
+def test_the_sql_cards_query_is_the_sources_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#1151: the card's update writes the Source's statement; execute runs it, read as asked."""
+    source, transform, target = _database_load(monkeypatch)
+    channel = _Channel([
+        {"command": "update", "changes": {"statement": "select 2", "current_page": 0,
+                                          "rows_per_page": 25, "order_by": [], "filters": []}},
+        {"command": "execute", "request_id": "sql-card-1"},
+        {"command": "close"},
+    ])
+
+    serve(channel, source, transform, target, **_hosting())
+
+    assert source.value("statement") == "select 2"
+    answered = [one for one in channel.emitted if one.get("request_id") == "sql-card-1"]
+    assert answered == [{"result": {"pageable": True, "rows": [{"statement": "select 2"}]},
+                         "request_id": "sql-card-1"}]
+    # The update is answered with the Load's projection, carrying the Source's statement.
+    projected = [one["projection"] for one in channel.emitted if "projection" in one]
+    assert projected[-1]["source"]["values"]["statement"] == "select 2"
+
+
+def test_a_property_the_query_does_not_have_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    source, transform, target = _database_load(monkeypatch)
+    channel = _Channel([{"command": "update", "changes": {"connection": "elsewhere"},
+                         "request_id": "u1"}, {"command": "close"}])
+
+    serve(channel, source, transform, target, **_hosting())
+
+    (refused,) = [one for one in channel.emitted if "error" in one]
+    assert "no live property ['connection']" in refused["error"]
+    assert source.value("source-connection") == "file_reader"
+
+
 def test_serve_sends_the_composed_projection_first(tmp_path: Path) -> None:
     channel = _Channel([{"command": "close"}])
 
@@ -118,14 +184,29 @@ def test_serve_sends_the_composed_projection_first(tmp_path: Path) -> None:
 
     (first,) = channel.emitted
     projection = first["projection"]
-    assert projection["panel_type"] == PANEL_TYPE == "load"
-    assert set(projection) == {"panel_type", "source", "transform", "destination",
-                               "connections"}
+    # Projected under the live Load's subject (#1151): its governed panel beside the
+    # three objects' own projections.
+    assert (projection["subject_key"], projection["panel"]) == ("loader.file", "loader_panel")
+    assert set(projection) == {"subject_key", "panel", "panel_settings", "source",
+                               "transform", "destination", "connections", "actions"}
     # The host's runtime offers no configured connection here.
     assert projection["connections"] == []
     # Each object describes its own fields, and offers its own choices.
     assert projection["source"]["field_metadata"]["statement"]["value_type"] == "sql"
     assert projection["destination"]["field_metadata"]["table"]["placeholder"] == "schema.table"
+    # #1151 rows 1-3: what each value IS, and which kind the modes are of, reach the
+    # panel as the objects state them.
+    assert projection["source"]["field_metadata"]["source-connection"]["value_type"] \
+        == "connection"
+    assert projection["destination"]["field_metadata"]["connection"]["value_type"] \
+        == "connection"
+    assert projection["destination"]["field_metadata"]["table"]["value_type"] == "table"
+    assert projection["destination"]["modes_kind"] == "database"
+    # #1151 row 4: which kinds map columns, and the HTTP request (none chosen here),
+    # as the Transform states them.
+    assert projection["transform"]["mapping_kinds"] == ["declaration", "http", "manifest"]
+    assert projection["transform"]["http_request"] is None
+    assert projection["transform"]["request_fields"]["http"] == ["http-adapter"]
     assert "file-type" in projection["source"]["choices"]
     assert projection["source"]["selected"] == "file"
     assert projection["transform"]["source_columns"] == ["a", "b"]
@@ -181,7 +262,7 @@ def test_a_refusal_is_answered_and_serving_goes_on(
 
     assert channel.emitted[1] == {"error": message, "command": command["command"],
                                   "request_id": 7}
-    assert channel.emitted[2]["projection"]["panel_type"] == "load"
+    assert channel.emitted[2]["projection"]["subject_key"] == "loader.file"
 
 
 def test_an_objects_own_refusal_is_reported_and_answered(
@@ -211,7 +292,7 @@ def test_preview_answers_the_result_with_the_projection_of_the_same_state(
     assert answer["preview"] == {"columns": ["a", "b"],
                                  "rows": [{"a": "1", "b": "2"}, {"a": "3", "b": "4"}],
                                  "truncated": False}
-    assert answer["projection"]["panel_type"] == "load"
+    assert answer["projection"]["subject_key"] == "loader.file"
 
 
 def test_a_preview_of_a_vanished_file_is_answered_and_serving_goes_on(
@@ -226,7 +307,7 @@ def test_a_preview_of_a_vanished_file_is_answered_and_serving_goes_on(
 
     assert channel.emitted[1]["command"] == "preview"
     assert channel.emitted[1]["request_id"] == "p2"
-    assert channel.emitted[2]["projection"]["panel_type"] == "load"
+    assert channel.emitted[2]["projection"]["subject_key"] == "loader.file"
 
 
 def test_the_explicit_close_releases_the_transforms_source_and_target(
@@ -255,7 +336,8 @@ def test_a_projection_request_is_answered_while_serving(tmp_path: Path) -> None:
     channel = _Channel(commands)
     served = threading.Thread(target=serve, args=(channel, *_load(_rows(tmp_path)),
                                                    SimpleNamespace()),
-                              kwargs={"run_log": _RunLog(), "capabilities": _Capabilities()},
+                              kwargs={"run_log": _RunLog(), "capabilities": _Capabilities(),
+                                      "declared": _DECLARED},
                               daemon=True)
     served.start()
     try:
@@ -300,7 +382,8 @@ def _serving(tmp_path: Path, run_log: _RunLog, ctx: Any = None) -> tuple[
     channel = _Channel(commands)
     loaded = _load(_rows(tmp_path))
     served = threading.Thread(target=serve, args=(channel, *loaded, ctx or SimpleNamespace()),
-                              kwargs={"run_log": run_log, "capabilities": _Capabilities()},
+                              kwargs={"run_log": run_log, "capabilities": _Capabilities(),
+                                      "declared": _DECLARED},
                               daemon=True)
     served.start()
     assert "projection" in channel.pushed.get(timeout=WAIT)
@@ -390,7 +473,7 @@ def test_while_a_load_runs_only_the_projection_is_answered_and_close_waits(
             assert answer["error"] == (f"A load is running; the {refused['command']} "
                                        "waits until it has finished.")
         commands.put({"command": "projection"})
-        assert channel.pushed.get(timeout=WAIT)["projection"]["panel_type"] == "load"
+        assert channel.pushed.get(timeout=WAIT)["projection"]["subject_key"] == "loader.file"
 
         commands.put({"command": "close"})
         served.join(timeout=0.5)
@@ -427,7 +510,7 @@ def test_an_unexpected_load_failure_is_answered_and_serving_goes_on(
             "rey_loader serve: the run failed: the destination's disk vanished")
         assert isinstance(_reports[-1].__cause__, RuntimeError)
         commands.put({"command": "projection"})
-        assert channel.pushed.get(timeout=WAIT)["projection"]["panel_type"] == "load"
+        assert channel.pushed.get(timeout=WAIT)["projection"]["subject_key"] == "loader.file"
     finally:
         commands.put(None)
         served.join(timeout=WAIT)
@@ -485,6 +568,29 @@ def test_no_identity_is_refused() -> None:
         hosted_load(SimpleNamespace())
 
 
+def test_a_governed_identity_reaches_the_governed_read_as_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The launch inputs are text; the governed read is asked by id (Load on mutation 7183)."""
+    asked: dict[str, Any] = {}
+
+    def governed(ctx: Any, **identity: Any) -> Source:
+        asked.update(identity)
+        return Source.from_declaration({})
+
+    monkeypatch.setattr(Source, "from_governed", governed)
+    monkeypatch.setattr(Transform, "from_source", lambda *args, **kwargs: None)
+
+    hosted_load(SimpleNamespace(), file_mutation_id="7183")
+
+    assert asked == {"file_manifest_id": None, "file_mutation_id": 7183}
+
+
+def test_a_governed_identity_that_is_not_an_id_is_refused() -> None:
+    with pytest.raises(ConfigError, match="file_manifest_id is not an id"):
+        hosted_load(SimpleNamespace(), file_manifest_id="seven")
+
+
 # -- the published command -------------------------------------------------------
 
 
@@ -497,11 +603,23 @@ def test_no_identity_is_refused() -> None:
 def test_serve_takes_one_load_identity(
     monkeypatch: pytest.MonkeyPatch, identity: list[str], attribute: str, value: str,
 ) -> None:
-    monkeypatch.setattr(sys, "argv", ["main.py", "--config-path", "/c", "serve", *identity])
+    monkeypatch.setattr(sys, "argv", ["main.py", "--config-path", "/c", "serve", *identity,
+                                      "--subject", "file"])
 
     args = loader_main._parse_args()
 
-    assert (args.command, getattr(args, attribute)) == ("serve", value)
+    assert (args.command, getattr(args, attribute), args.subject) == ("serve", value, "file")
+
+
+def test_serve_refuses_a_load_without_the_selected_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1151: a Load opens on the selected subject it acts on."""
+    monkeypatch.setattr(sys, "argv", ["main.py", "--config-path", "/c", "serve",
+                                      "--file-manifest-id", "15"])
+
+    with pytest.raises(SystemExit):
+        loader_main._parse_args()
 
 
 @pytest.mark.parametrize("identity", [
@@ -527,7 +645,8 @@ def test_serve_is_published_as_a_hosted_command() -> None:
 
     assert published["serve"]["invocation"] == "hosted"
     assert [p["name"] for p in published["serve"]["parameters"]] == [
-        "file-manifest-id", "file-mutation-id", "file", "statement", "source-connection"]
+        "file-manifest-id", "file-mutation-id", "file", "statement", "source-connection",
+        "subject"]
     assert published["serve"]["parameter_groups"][0]["members"] == [
         "file-manifest-id", "file-mutation-id", "file", "statement"]
 
@@ -540,6 +659,7 @@ CHILD = textwrap.dedent(f"""
     from pathlib import Path
     from types import SimpleNamespace
     sys.path.insert(0, {str(_ROOT)!r})
+    from rey_lib.presentation import Projection
     from rey_lib.run import AppExecute
     from rey_lib.run.app_channel import AttachedApp
     from rey_loader.serve import hosted_load, serve
@@ -557,7 +677,9 @@ CHILD = textwrap.dedent(f"""
                                  subject_id="rey_loader")
     channel = AttachedApp.attach(application_run.run_id)
     serve(channel, *hosted_load(ctx, file=sys.argv[1]), ctx, run_log=None,
-          capabilities=NoCapabilities())
+          capabilities=NoCapabilities(),
+          declared=Projection(subject_key="loader.file", panel="loader_panel",
+                              panel_settings=dict(), content=dict()))
     channel.close()
 """)
 
@@ -578,3 +700,137 @@ def test_the_launcher_operates_the_served_load_over_the_channel(tmp_path: Path) 
         assert app.wait(timeout=WAIT) == 0
     finally:
         app.close()
+
+
+@pytest.mark.parametrize(("subject", "key"), [
+    ("file", "loader.file"), ("mutation.record", "loader.mutation")])
+def test_the_live_load_presents_itself_as_loader_and_the_selected_subject(
+    subject: str, key: str,
+) -> None:
+    """#1151: the selected row's subject is transformed, never replaced by the button."""
+    assert presentation_key(subject) == key
+
+
+def test_a_load_with_no_selected_subject_is_refused() -> None:
+    with pytest.raises(ConfigError, match="selected subject"):
+        presentation_key("")
+
+
+def test_serve_declares_the_selected_subjects_it_opens_a_load_on() -> None:
+    """#1151: the Load button's reference kinds reach serve by its own declaration."""
+    from rey_lib.config.applications import build_applications
+
+    from rey_loader import registration
+
+    built = build_applications(
+        SimpleNamespace(apps=[{"name": "rey_loader", "app_path": "/apps/rey_loader"}],
+                        connections=[]),
+        {"rey_loader": registration.get_registration()})[0]
+
+    command = built.command("serve")
+    assert command.hosted_subject_kinds == ("governed_file", "mutation_file", "mutation_object")
+    assert "subject" in {parameter.name for parameter in command.parameters}
+
+
+# -- the declared actions (#1151, the Workflow pattern) ------------------------------
+
+
+def _filled(action: dict[str, Any], given: dict[str, Any]) -> dict[str, Any]:
+    """What a panel sends: the declared command, with each raw input at its declared path."""
+    import copy
+
+    command = copy.deepcopy(action["command"])
+    for name, path in (action.get("inputs") or {}).items():
+        place = command
+        for key in path[:-1]:
+            place = place.setdefault(key, {})
+        place[path[-1]] = given[name]
+    return command
+
+
+def _first_projection(tmp_path: Path) -> dict[str, Any]:
+    channel = _Channel([{"command": "close"}])
+    serve(channel, *_load(_rows(tmp_path)), **_hosting())
+    return channel.emitted[0]["projection"]
+
+
+def _by_role(actions: list[dict[str, Any]], **role: str) -> list[dict[str, Any]]:
+    """The declared actions of exactly that role -- how a surface finds one."""
+    return [one for one in actions if one["role"] == role]
+
+
+def test_each_action_is_found_by_its_role_never_by_an_operation_name(tmp_path: Path) -> None:
+    """#1151 row 5: what an action does to which projected state; no id travels."""
+    actions = _first_projection(tmp_path)["actions"]
+
+    assert set(actions) == {"source", "transform", "destination", "load"}
+    assert all("id" not in one for listed in actions.values() for one in listed)
+    (choose,) = _by_role(actions["source"], act="choose", on="kinds")
+    assert choose == {"role": {"act": "choose", "on": "kinds"},
+                      "command": {"command": "operate", "object": "source",
+                                  "operation": "select", "arguments": {}},
+                      "inputs": {"choice": ["arguments", "kind"]}}
+    (edit,) = _by_role(actions["transform"], act="set", on="columns")
+    assert edit["inputs"] == {"index": ["arguments", "at"], "field": ["arguments", "field"],
+                              "value": ["arguments", "value"]}
+    (policy,) = _by_role(actions["destination"], act="choose", on="modes")
+    assert policy["inputs"] == {"choice": ["arguments", "policy"]}
+    assert [one["role"] for one in actions["load"]] == [
+        {"act": "read", "on": "load"}, {"act": "read", "on": "preview"},
+        {"act": "run", "on": "load"}]
+    (run,) = _by_role(actions["load"], act="run", on="load")
+    assert run["inputs"] == {"dry_run": ["dry_run"]}
+
+
+def test_every_role_input_is_a_parameter_of_the_operation_it_fills() -> None:
+    """A role is the routing table's, over operations it routes, onto real parameters."""
+    for name, roles in _ROLES.items():
+        for operation, (_, inputs) in roles.items():
+            method = _OPERATIONS[name][operation]
+            parameters = set(inspect.signature(method).parameters) - {"self", "ctx"}
+            assert set(inputs.values()) <= parameters, (name, operation)
+
+
+def test_a_field_is_its_own_action_and_its_object_says_which_operation_editing_it_is(
+    tmp_path: Path,
+) -> None:
+    projection = _first_projection(tmp_path)
+    (table,) = _by_role(projection["actions"]["destination"],
+                        act="set", on="values", field="table")
+
+    assert table == {"role": {"act": "set", "on": "values", "field": "table"},
+                     "command": {"command": "operate", "object": "destination",
+                                 "operation": "update", "arguments": {"name": "table"}},
+                     "inputs": {"value": ["arguments", "value"]}}
+    for name, operation in (projection["transform"].get("field_operations") or {}).items():
+        (declared,) = _by_role(projection["actions"]["transform"],
+                               act="set", on="values", field=name)
+        assert declared["command"]["operation"] == operation
+
+
+def test_an_operation_its_object_does_not_offer_is_not_declared(tmp_path: Path) -> None:
+    projection = _first_projection(tmp_path)
+
+    for name, gated, role in (
+        ("source", "save_query", {"act": "save", "on": "values", "field": "statement"}),
+        ("transform", "save", {"act": "save", "on": "columns"}),
+    ):
+        offered = gated in (projection[name].get("operations") or [])
+        assert bool(_by_role(projection["actions"][name], **role)) is offered
+
+
+def test_a_declared_action_filled_at_its_slots_is_answered_by_serve(tmp_path: Path) -> None:
+    """The panel's whole part: copy, fill the declared slots, send unchanged."""
+    source, transform, target = _load(_rows(tmp_path))
+    first = _Channel([{"command": "close"}])
+    serve(first, source, transform, target, **_hosting())
+    (table,) = _by_role(first.emitted[0]["projection"]["actions"]["destination"],
+                        act="set", on="values", field="table")
+    channel = _Channel([{**_filled(table, {"value": "stage.rows"}), "request_id": "a1"},
+                        {"command": "close"}])
+
+    serve(channel, source, transform, target, **_hosting())
+
+    assert target.value("table") == "stage.rows"
+    assert channel.emitted[-1]["request_id"] == "a1"
+    assert "error" not in channel.emitted[-1]

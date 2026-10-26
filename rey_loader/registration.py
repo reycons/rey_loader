@@ -465,6 +465,9 @@ _COMMANDS: list[dict[str, Any]] = [
         "name": "serve",
         # Needs the launcher's channel, so the application runner does not offer it (#1166).
         "invocation": "hosted",
+        # The selected Tree subjects a Load opens on (#1151): the Load button's
+        # reference kinds. The selected row's subject travels as --subject.
+        "hosted_subject_kinds": ["governed_file", "mutation_file", "mutation_object"],
         "description": "Hold one load for the launcher attached through the app channel.",
         # Exactly one identity; the parser refuses none or several, so none is
         # required on its own. A statement comes with the connection it runs on.
@@ -484,6 +487,9 @@ _COMMANDS: list[dict[str, Any]] = [
              "description": "A statement whose result is the load's source."},
             {"name": "source-connection", "required": False, "value_type": "string",
              "description": "With statement: the configured connection it runs on."},
+            {"name": "subject", "required": False, "value_type": "string",
+             "description": "The selected subject the Load acts on (its subject_key); "
+                            "the Load presents itself as loader.<its first segment>."},
         ],
     },
 ]

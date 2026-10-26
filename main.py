@@ -32,6 +32,7 @@ preparse_config_args()
 from rey_lib.config.bootstrap import app_runtime, open_shared_control
 from rey_lib.config.cli import add_config_args, apply_env_overrides, build_ctx_from_args
 from rey_lib.logs import AppLogger
+from rey_lib.presentation import Projection
 from rey_lib.run_lifecycle import run_app_operation
 from rey_lib.logs import finalize_run_log
 from rey_lib.run.app_channel import AttachedApp
@@ -40,7 +41,7 @@ from rey_lib.run.app_channel import AttachedApp
 from rey_loader.error_utils import ReyLoaderError
 from rey_lib.load import Source, Target, Transform
 from rey_loader.load import run_load, run_load_objects, run_load_one
-from rey_loader.serve import hosted_capabilities, hosted_load, serve
+from rey_loader.serve import hosted_capabilities, hosted_load, presentation_key, serve
 from rey_loader.sql_apply import run_sql_apply
 from rey_loader.transform import run_transform
 
@@ -137,10 +138,13 @@ def _cmd_serve(ctx: Any, run_log: Any, args: argparse.Namespace, log: Any) -> in
     opened_by = next(name for name in _SERVE_IDENTITIES if getattr(args, name))
     capabilities = hosted_capabilities(ctx, control, source, transform, target,
                                        opened_by.removesuffix("_id"))
+    # Its governed presentation, read once through the same Control (#1151): the
+    # live Load is the subject loader.<the selected subject it acts on>.
+    declared = Projection.for_subject(control, presentation_key(args.subject), {})
     channel = AttachedApp.attach(ctx.run.run_id)
     try:
         serve(channel, source, transform, target, ctx, run_log=run_log,
-              capabilities=capabilities)
+              capabilities=capabilities, declared=declared)
     finally:
         channel.close()
     log.info("rey_loader complete — served a %s load.", source.selected_kind())
@@ -605,6 +609,14 @@ def _parse_args() -> argparse.Namespace:
         help="With load --file-manifest-id / --file-mutation-id: the governing "
              "file type, where it is not the file's own.",
     )
+    # The selected Tree subject a served Load acts on (#1151): the Load interaction
+    # passes the row's own subject_key; the Load presents itself as loader.<it>.
+    parser.add_argument(
+        "--subject",
+        dest="subject",
+        default="",
+        help="With serve: the selected subject the Load acts on (its subject_key).",
+    )
     parser.add_argument(
         "--dry-run",
         dest="dry_run",
@@ -640,6 +652,8 @@ def _check_serve_arguments(parser: argparse.ArgumentParser, args: argparse.Names
         )
     if bool(args.statement) != bool(args.source_connection):
         parser.error("serve requires --statement and --source-connection together.")
+    if not args.subject:
+        parser.error("serve opens a Load on the selected subject it acts on: --subject.")
     accepted = (*_SERVE_IDENTITIES, "source_connection")
     others = sorted(
         name for name in (*_SOURCE_ARGUMENTS, *_TRANSFORM_ARGUMENTS, *_TARGET_ARGUMENTS,

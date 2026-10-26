@@ -60,9 +60,10 @@ CONSUMED: dict[str, set[str]] = {
     "all": {"dry-run"},
     "sql": {"source", "dry-run"},
     # The hosted Load's opening identity (#1151): exactly one of the first four,
-    # a statement with the connection it runs on.
+    # a statement with the connection it runs on -- and the selected subject the
+    # Load acts on, under which it presents itself.
     "serve": {"file-manifest-id", "file-mutation-id", "file", "statement",
-              "source-connection"},
+              "source-connection", "subject"},
 }
 
 
@@ -127,7 +128,7 @@ class TestTheRecipesInvariants:
             "http-adapter", "http-transform", "http-request",
             "table", "connection", "create", "replace", "recreate", "append",
             "out-file", "file-type", "dry-run",
-            "file-manifest-id", "file-mutation-id", "file-type-id",
+            "file-manifest-id", "file-mutation-id", "file-type-id", "subject",
         }
 
     def test_one_declaration_style_only(self) -> None:

@@ -24,6 +24,7 @@ import pytest
 from rey_lib.config.applications import build_applications, with_choice_collections
 from rey_lib.errors.error_utils import AppError
 from rey_lib.load import Source, Target, Transform
+from rey_lib.presentation import Projection
 from rey_lib.run.app_channel import LaunchedApp
 
 import main as loader_main
@@ -153,7 +154,9 @@ def test_a_definition_takes_no_inputs(tmp_path: Path) -> None:
 def _serving(loaded: tuple[Source, Transform, Target], channel: _Channel) -> threading.Thread:
     served = threading.Thread(
         target=serve, args=(channel, *loaded, SimpleNamespace()),
-        kwargs={"run_log": _RunLog(), "capabilities": _held(loaded)}, daemon=True)
+        kwargs={"run_log": _RunLog(), "capabilities": _held(loaded),
+                "declared": Projection(subject_key="loader.file", panel="loader_panel",
+                                       panel_settings={}, content={})}, daemon=True)
     served.start()
     return served
 
@@ -218,7 +221,8 @@ def test_serve_settles_the_capabilities_for_the_identity_it_was_opened_by(
     identity: dict[str, str], kind: str,
 ) -> None:
     args = Namespace(**{"file_manifest_id": None, "file_mutation_id": None, "file": None,
-                        "statement": None, "source_connection": None, **identity})
+                        "statement": None, "source_connection": None,
+                        "subject": "mutation.record", **identity})
     ctx = SimpleNamespace(run=SimpleNamespace(run_id=7))
     source = SimpleNamespace(selected_kind=lambda: "file")
     loaded = (source, "transform", "target")
@@ -233,12 +237,17 @@ def test_serve_settles_the_capabilities_for_the_identity_it_was_opened_by(
     ), patch.object(
         loader_main.AttachedApp, "attach", return_value=Mock(),
     ), patch.object(
+        loader_main.Projection, "for_subject",
+        side_effect=lambda control, key, content: ("declared", control, key),
+    ), patch.object(
         loader_main, "serve", new=lambda *a, **kw: served.append(kw),
     ):
         assert loader_main._cmd_serve(ctx, "run log", args, Mock()) == 0
 
     assert settled == [(ctx, "control", source, "transform", "target", kind)]
     assert served[0]["capabilities"] == "capabilities"
+    # Presented under the live Load's subject (#1151), read through the same Control.
+    assert served[0]["declared"] == ("declared", "control", "loader.mutation")
 
 
 # -- over the real channel --------------------------------------------------------
@@ -250,6 +259,7 @@ CHILD = textwrap.dedent(f"""
     from types import SimpleNamespace
     sys.path.insert(0, {str(_ROOT)!r})
     sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})
+    from rey_lib.presentation import Projection
     from rey_lib.run import AppExecute
     from rey_lib.run.app_channel import AttachedApp
     from rey_loader.serve import hosted_load, serve
@@ -264,7 +274,9 @@ CHILD = textwrap.dedent(f"""
                                  subject_id="rey_loader")
     channel = AttachedApp.attach(application_run.run_id)
     loaded = hosted_load(ctx, file=sys.argv[1])
-    serve(channel, *loaded, ctx, run_log=None, capabilities=_held(loaded))
+    serve(channel, *loaded, ctx, run_log=None, capabilities=_held(loaded),
+          declared=Projection(subject_key="loader.file", panel="loader_panel",
+                              panel_settings=dict(), content=dict()))
     channel.close()
 """)
 
