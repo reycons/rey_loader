@@ -27,6 +27,7 @@ from typing import Any, Callable, Final, Mapping, Optional
 
 from rey_lib.config.applications import configured_application
 from rey_lib.db.connection import build_connections, is_database_connection
+from rey_lib.db.database_query import DatabaseQuery
 from rey_lib.errors.error_utils import AppError, ConfigError, StateError
 from rey_lib.files.data_file.base import DataFile
 from rey_lib.load import Source, Target, Transform
@@ -147,6 +148,20 @@ def _execute(channel: Any, query: Any, request_id: Any) -> None:
     channel.emit({"result": answer, "request_id": request_id})
 
 
+def _lint(channel: Any, query: Any, ctx: Any, request_id: Any) -> None:
+    """Lint the Source's statement through its query, and answer the reader (#1252).
+
+    The same admitted answer boundary as ``_execute``: DatabaseQuery.lint owns the
+    operation; a failure is reported once and answered, and serving goes on.
+    """
+    try:
+        answer = query.lint(ctx)
+    except Exception as exc:  # noqa: BLE001 -- the admitted lint answer boundary
+        _answer_failure(channel, exc, "lint", request_id)
+        return
+    channel.emit({"result": answer, "request_id": request_id})
+
+
 def _governed_id(name: str, given: str | None) -> int | None:
     """One governed identity from its launch input, as the id it names; None when absent.
 
@@ -223,6 +238,9 @@ def serve(
       "rows"}, "request_id"}``. While it runs, ``run``, ``operate`` and
       ``preview`` are refused -- the load is reading the objects -- and
       ``projection`` is answered.
+    - ``{"command": "lint", "request_id": ...}`` lints the Source's statement
+      through an ephemeral DatabaseQuery on it, off the thread reading commands,
+      and answers ``{"result": {formattedSql, diagnostics}, "request_id"}`` (#1252).
     - ``{"command": "invoke", "capability": ..., "inputs": {...}, "request_id"}``
       asks ``capabilities``, answered inline ``{"result": ..., "request_id"}``
       (#1199 S5) -- a read of one held object, so a running load does not
@@ -287,6 +305,13 @@ def serve(
                     _answer_failure(channel, refusal, name, request_id)
                     continue
                 loading.submit(_execute, channel, query, request_id)
+                continue
+            if name == "lint":
+                # The Source owns the statement (#1252): an ephemeral, connection-free
+                # query over it lints it, as Source.query builds one per execute.
+                with source.act():
+                    statement = str(source.value("statement") or "")
+                loading.submit(_lint, channel, DatabaseQuery(statement), ctx, request_id)
                 continue
             if name == "invoke":
                 try:

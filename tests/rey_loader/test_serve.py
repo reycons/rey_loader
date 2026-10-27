@@ -165,6 +165,72 @@ def test_the_sql_cards_query_is_the_sources_own(monkeypatch: pytest.MonkeyPatch)
     assert projected[-1]["source"]["values"]["statement"] == "select 2"
 
 
+class _Linted:
+    """A stand-in DatabaseQuery for lint: what it was built with, and its lint answer."""
+
+    built: list[tuple[str, dict[str, Any]]] = []
+    raises: Exception | None = None
+
+    def __init__(self, statement: str, **kwargs: Any) -> None:
+        self.statement = statement
+        _Linted.built.append((statement, kwargs))
+
+    def lint(self, ctx: Any) -> dict[str, Any]:
+        if _Linted.raises is not None:
+            raise _Linted.raises
+        return {"formattedSql": self.statement.upper(), "diagnostics": []}
+
+
+def test_lint_lints_the_sources_statement_and_holds_no_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1252: an ephemeral, connection-free query over the Source's statement lints it."""
+    from rey_loader import serve as module
+
+    monkeypatch.setattr(_Linted, "built", [])
+    monkeypatch.setattr(_Linted, "raises", None)
+    monkeypatch.setattr(module, "DatabaseQuery", _Linted)
+    source, transform, target = _database_load(monkeypatch)
+    channel = _Channel([
+        {"command": "update", "changes": {"statement": "select 2"}},
+        {"command": "lint", "request_id": "lint-1"},
+        {"command": "close"},
+    ])
+
+    serve(channel, source, transform, target, **_hosting())
+
+    assert _Linted.built == [("select 2", {})]
+    answered = [one for one in channel.emitted if one.get("request_id") == "lint-1"]
+    assert answered == [{"result": {"formattedSql": "SELECT 2", "diagnostics": []},
+                         "request_id": "lint-1"}]
+    # Lint is read-only: the Source's statement is what the reader wrote.
+    assert source.value("statement") == "select 2"
+
+
+def test_a_failed_lint_is_answered_and_serving_goes_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rey_loader import serve as module
+
+    monkeypatch.setattr(_Linted, "built", [])
+    monkeypatch.setattr(_Linted, "raises", AppError("unparsable"))
+    monkeypatch.setattr(module, "DatabaseQuery", _Linted)
+    source, transform, target = _database_load(monkeypatch)
+    channel = _Channel([
+        {"command": "lint", "request_id": "lint-2"},
+        {"command": "projection"},
+        {"command": "close"},
+    ])
+
+    serve(channel, source, transform, target, **_hosting())
+
+    (refused,) = [one for one in channel.emitted if "error" in one]
+    assert refused["command"] == "lint" and refused["request_id"] == "lint-2"
+    assert "unparsable" in refused["error"]
+    # The projection asked for after it is still answered: serving went on.
+    assert len([one for one in channel.emitted if "projection" in one]) == 2
+
+
 def test_a_property_the_query_does_not_have_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     source, transform, target = _database_load(monkeypatch)
     channel = _Channel([{"command": "update", "changes": {"connection": "elsewhere"},
