@@ -23,14 +23,14 @@ from rey_lib.db.procedure_map import ProcedureMap, get_procedure_map
 from rey_lib.files.file_loader import transform_one, validate_one
 from rey_lib.load.load_operation import load_one
 from rey_lib.files.file_utils import delete_file, move_file, visible_files
-from rey_lib.load.classify import run_source_file_classification
-from rey_lib.load.convert import ConversionError, run_excel_conversion
-from rey_lib.load.inventory import run_source_inventory
-from rey_lib.load.prepare import run_create_prepared_files
-from rey_lib.load.profile import run_record_type_profiling
+from rey_lib.files.classify import run_source_file_classification
+from rey_lib.files.convert import ConversionError, run_excel_conversion
+from rey_lib.files.inventory import run_source_inventory
+from rey_lib.files.prepare import run_create_prepared_files
+from rey_lib.files.profile import run_record_type_profiling
 
 from rey_loader import __version__ as _LOADER_VERSION
-from rey_lib.load.sanitize import run_file_sanitization
+from rey_lib.files.sanitize import run_file_sanitization
 from rey_lib.logs import AppLogger
 from rey_lib.workflow import RunContext, StepResult
 

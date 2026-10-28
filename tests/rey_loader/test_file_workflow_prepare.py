@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from rey_lib.load.prepare import CreatePreparedFilesBatchResult, PreparedFileResult
+from rey_lib.files.prepare import CreatePreparedFilesBatchResult, PreparedFileResult
 from rey_lib.workflow import RunContext
 
 from rey_loader import workflow

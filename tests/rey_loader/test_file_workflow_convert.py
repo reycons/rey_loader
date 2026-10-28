@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from rey_lib.load.convert import ConversionError
+from rey_lib.files.convert import ConversionError
 from rey_lib.workflow import RunContext
 
 from rey_loader import workflow

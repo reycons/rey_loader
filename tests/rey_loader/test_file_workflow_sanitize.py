@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from rey_lib.load.sanitize import FileSanitizationBatchResult
+from rey_lib.files.sanitize import FileSanitizationBatchResult
 from rey_lib.workflow import RunContext
 
 from rey_loader import workflow

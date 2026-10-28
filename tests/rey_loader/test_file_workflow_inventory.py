@@ -48,7 +48,7 @@ def test_the_handler_imports_nothing_from_file_operator() -> None:
     """The guardrail: the replacement never reaches the legacy implementation."""
     import inspect
 
-    import rey_lib.load.inventory as inventory_module
+    import rey_lib.files.inventory as inventory_module
 
     for module in (workflow, inventory_module):
         assert "file_operator" not in inspect.getsource(module).split('"""', 2)[-1]

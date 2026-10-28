@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from rey_lib.load.classify import SourceClassificationBatchResult
+from rey_lib.files.classify import SourceClassificationBatchResult
 from rey_lib.workflow import RunContext
 
 from rey_loader import workflow
