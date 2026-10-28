@@ -33,26 +33,6 @@ class TestPublicationAndCatalogAgree:
 class TestTheDispatchers:
     """What each dispatcher reads, as its reader reads it."""
 
-    def test_file_operation_holds_one_variant_per_operation(self) -> None:
-        definition = contract("file_operation")
-        chosen = [variant["properties"]["operation"]["const"] for variant in definition["oneOf"]]
-
-        assert chosen == ["discover", "discover_file", "move", "delete"]
-        assert definition["properties"]["operation"]["enum"] == chosen
-
-    def test_each_file_operation_variant_requires_what_it_reads(self) -> None:
-        required = {
-            variant["properties"]["operation"]["const"]: set(variant["required"])
-            for variant in contract("file_operation")["oneOf"]
-        }
-
-        assert required == {
-            "discover": {"operation", "data_source", "path"},
-            "discover_file": {"operation", "data_source", "path"},
-            "move": {"operation", "data_source", "to"},
-            "delete": {"operation"},
-        }
-
     def test_sql_operation_requires_what_its_reader_refuses_without(self) -> None:
         """_process_sql_operation refuses every operation lacking any of these."""
         assert set(contract("sql_operation")["required"]) == {

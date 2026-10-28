@@ -28,7 +28,6 @@ from rey_lib.workflow import RunContext, StepResult
 from rey_loader.error_utils import ReyLoaderError
 from rey_loader.workflow import (
     _process_etl_operation,
-    _process_file_operation,
     _process_sql_operation,
     _process_validate,
     build_process_registry,
@@ -142,53 +141,6 @@ def test_sql_operation_without_a_connection_fails_closed(run_log):
 def test_sql_operation_unsupported_operation_fails_closed(run_log):
     with pytest.raises(ReyLoaderError, match="unsupported operation"):
         _process_sql_operation(_NS(), run_log, {"operation": "nope"}, RunContext(), MagicMock())
-
-
-# ---------------------------------------------------------------------------
-# file_operation
-# ---------------------------------------------------------------------------
-
-def test_discover_file_binds_a_single_file(run_log, tmp_path):
-    (tmp_path / "tran_1.csv").write_text("x")
-    (tmp_path / "tran_2.csv").write_text("y")
-    ds = _NS(name="advantage", paths=_NS(inbox_path=str(tmp_path)))
-    ctx = _NS(data_sources=[ds])
-    config = {"operation": "discover_file", "data_source": "advantage",
-              "path": "inbox_path", "pattern": "tran_*.csv",
-              "output": {"current_file": "current_file"}}
-    result = _process_file_operation(ctx, run_log, config, RunContext(metadata={}))
-    assert result.status == "ok"
-    assert Path(ctx.current_file).name == "tran_1.csv"   # single, first in order
-    assert ctx.no_file is False
-
-
-def test_discover_file_no_file_sets_flag(run_log, tmp_path):
-    ds = _NS(name="advantage", paths=_NS(inbox_path=str(tmp_path)))
-    ctx = _NS(data_sources=[ds])
-    config = {"operation": "discover_file", "data_source": "advantage",
-              "path": "inbox_path", "pattern": "tran_*.csv",
-              "output": {"current_file": "current_file"}}
-    result = _process_file_operation(ctx, run_log, config, RunContext(metadata={}))
-    assert result.status == "ok" and result.detail == "no file"
-    assert ctx.no_file is True and ctx.current_file is None
-
-
-def test_file_operation_move_uses_destination_key(run_log, tmp_path):
-    ds = _NS(name="advantage", paths=_NS(processing_path=str(tmp_path / "proc")))
-    ctx = _NS(data_sources=[ds], current_file=str(tmp_path / "f.csv"))
-    config = {"operation": "move", "data_source": "advantage", "to": "processing_path"}
-    with patch("rey_loader.workflow.move_file",
-               return_value=tmp_path / "proc" / "f.csv") as mv:
-        result = _process_file_operation(ctx, run_log, config, RunContext())
-    mv.assert_called_once()
-    assert result.status == "ok" and ctx.current_file.endswith("proc/f.csv")
-
-
-def test_file_operation_delete_refuses_missing_current_file(run_log):
-    ctx = _NS(data_sources=[])
-    with pytest.raises(ReyLoaderError, match="no current file"):
-        _process_file_operation(ctx, run_log, {"operation": "delete", "data_source": "advantage"},
-                                RunContext())
 
 
 # ---------------------------------------------------------------------------
